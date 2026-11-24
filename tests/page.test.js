@@ -8,7 +8,7 @@ sunday.setDate(sunday.getDate() - sunday.getDay());
 const sheet = sunday.getFullYear() + "-" + String(sunday.getMonth() + 1).padStart(2, "0") + "-" + String(sunday.getDate()).padStart(2, "0");
 
 const data = {
-  members: [{ id: me, display_name: "Leo" }],
+  members: [{ id: me, display_name: "Me" }],
   families: [{ id: "f1", name: "Smith" }],
   requests: [
     { id: "r1", list: "lifegroup", family_id: "f1", body: "New job <b>soon</b>", sheet_date: sheet, status: "active", created_by: me, created_at: new Date().toISOString() },
