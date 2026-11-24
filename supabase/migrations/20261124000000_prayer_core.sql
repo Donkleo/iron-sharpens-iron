@@ -102,6 +102,14 @@ as $$
   );
 $$;
 
+create function public.my_email() returns text
+language sql stable security definer set search_path = ''
+as $$
+  select m.email from public.members m where m.id = auth.uid();
+$$;
+
+revoke all on function public.my_email() from public, anon;
+grant execute on function public.my_email() to authenticated;
 revoke all on function public.is_member() from public, anon;
 revoke all on function public.is_admin() from public, anon;
 grant execute on function public.is_member() to authenticated;
@@ -149,6 +157,27 @@ create trigger create_member
   after insert on auth.users
   for each row execute function public.create_member();
 
+-- If someone already had an account before being invited, give them their
+-- member row as soon as the invite is added.
+create function public.member_from_invite() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  insert into public.members (id, email, display_name)
+  select u.id, new.email, new.name
+  from auth.users u
+  where lower(u.email) = new.email
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+revoke all on function public.member_from_invite() from public, anon, authenticated;
+
+create trigger member_from_invite
+  after insert on public.invites
+  for each row execute function public.member_from_invite();
+
 -- ---------------------------------------------------------------------------
 -- Answered: who and when are set by the database, not the browser
 -- ---------------------------------------------------------------------------
@@ -176,6 +205,25 @@ $$;
 
 revoke all on function public.stamp_request_status() from public, anon, authenticated;
 
+-- Keep the brother's name on his request, so the request still reads right
+-- (and can still be saved) if his account is ever removed.
+create function public.fill_for_name() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if new.for_member is not null then
+    select m.display_name into new.for_name from public.members m where m.id = new.for_member;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.fill_for_name() from public, anon, authenticated;
+
+create trigger fill_for_name
+  before insert or update of for_member on public.requests
+  for each row execute function public.fill_for_name();
+
 create trigger stamp_request_status
   before insert or update on public.requests
   for each row execute function public.stamp_request_status();
@@ -199,63 +247,66 @@ revoke all on public.invites, public.members, public.families, public.requests,
 -- invites: admins only
 grant select, insert, delete on public.invites to authenticated;
 grant update (name, role) on public.invites to authenticated;
-create policy invites_admin_select on public.invites for select to authenticated using (public.is_admin());
-create policy invites_admin_insert on public.invites for insert to authenticated with check (public.is_admin());
-create policy invites_admin_update on public.invites for update to authenticated using (public.is_admin()) with check (public.is_admin());
-create policy invites_admin_delete on public.invites for delete to authenticated using (public.is_admin());
+create policy invites_admin_select on public.invites for select to authenticated using ((select public.is_admin()));
+create policy invites_admin_insert on public.invites for insert to authenticated with check ((select public.is_admin()));
+-- An admin can't remove or demote their own invite, so the group always keeps an admin.
+create policy invites_admin_update on public.invites for update to authenticated
+  using ((select public.is_admin()) and email <> (select public.my_email()))
+  with check ((select public.is_admin()));
+create policy invites_admin_delete on public.invites for delete to authenticated
+  using ((select public.is_admin()) and email <> (select public.my_email()));
 
 -- members: everyone in the group sees names (not emails); you can rename yourself
 grant select (id, display_name, created_at) on public.members to authenticated;
 grant update (display_name) on public.members to authenticated;
-create policy members_select on public.members for select to authenticated using (public.is_member());
+create policy members_select on public.members for select to authenticated using ((select public.is_member()));
 create policy members_update_self on public.members for update to authenticated
-  using (id = auth.uid() and public.is_member())
-  with check (id = auth.uid() and public.is_member());
+  using (id = (select auth.uid()) and (select public.is_member()))
+  with check (id = (select auth.uid()) and (select public.is_member()));
 
 -- families
 grant select on public.families to authenticated;
 grant insert (name) on public.families to authenticated;
-grant update (name) on public.families to authenticated;
 grant delete on public.families to authenticated;
-create policy families_select on public.families for select to authenticated using (public.is_member());
+create policy families_select on public.families for select to authenticated using ((select public.is_member()));
 create policy families_insert on public.families for insert to authenticated
-  with check (public.is_member() and created_by = auth.uid());
-create policy families_update on public.families for update to authenticated
-  using (public.is_member()) with check (public.is_member());
-create policy families_delete on public.families for delete to authenticated using (public.is_admin());
+  with check ((select public.is_member()) and created_by = (select auth.uid()));
+create policy families_delete on public.families for delete to authenticated using ((select public.is_admin()));
 
 -- requests: every member can add, update and answer; delete is for whoever
 -- added it, or an admin
 grant select on public.requests to authenticated;
 grant insert (list, family_id, for_member, for_name, body, sheet_date)
   on public.requests to authenticated;
-grant update (family_id, for_member, for_name, body, sheet_date, status, answered_note)
-  on public.requests to authenticated;
+-- Members can mark a request answered (or not yet) but not rewrite someone
+-- else's words.
+grant update (status, answered_note) on public.requests to authenticated;
 grant delete on public.requests to authenticated;
-create policy requests_select on public.requests for select to authenticated using (public.is_member());
+create policy requests_select on public.requests for select to authenticated using ((select public.is_member()));
 create policy requests_insert on public.requests for insert to authenticated
-  with check (public.is_member() and created_by = auth.uid());
+  with check ((select public.is_member()) and created_by = (select auth.uid()));
 create policy requests_update on public.requests for update to authenticated
-  using (public.is_member()) with check (public.is_member());
+  using ((select public.is_member())) with check ((select public.is_member()));
 create policy requests_delete on public.requests for delete to authenticated
-  using (public.is_member() and (created_by = auth.uid() or public.is_admin()));
+  using ((select public.is_member()) and (created_by = (select auth.uid()) or (select public.is_admin())));
 
 -- request_updates
 grant select on public.request_updates to authenticated;
 grant insert (request_id, body) on public.request_updates to authenticated;
 grant delete on public.request_updates to authenticated;
-create policy request_updates_select on public.request_updates for select to authenticated using (public.is_member());
+create policy request_updates_select on public.request_updates for select to authenticated using ((select public.is_member()));
 create policy request_updates_insert on public.request_updates for insert to authenticated
-  with check (public.is_member() and created_by = auth.uid());
+  with check ((select public.is_member()) and created_by = (select auth.uid()));
 create policy request_updates_delete on public.request_updates for delete to authenticated
-  using (public.is_member() and (created_by = auth.uid() or public.is_admin()));
+  using ((select public.is_member()) and (created_by = (select auth.uid()) or (select public.is_admin())));
 
 -- prayers ("I prayed"): you can only mark or undo your own
 grant select on public.prayers to authenticated;
 grant insert (request_id) on public.prayers to authenticated;
 grant delete on public.prayers to authenticated;
-create policy prayers_select on public.prayers for select to authenticated using (public.is_member());
+create policy prayers_select on public.prayers for select to authenticated using ((select public.is_member()));
 create policy prayers_insert on public.prayers for insert to authenticated
-  with check (public.is_member() and member_id = auth.uid());
+  with check ((select public.is_member()) and member_id = (select auth.uid()));
 create policy prayers_delete on public.prayers for delete to authenticated
-  using (public.is_member() and member_id = auth.uid());
+  using ((select public.is_member()) and member_id = (select auth.uid()));
+

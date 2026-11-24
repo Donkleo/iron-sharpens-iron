@@ -1,8 +1,8 @@
 # Backlog
 
 Improvements, in order. Each item becomes one small pull request that is
-reviewed before Leo sees it. Taken from the Product Vision doc and the Website
-Move Plan, with Leo's notes: scale back, get prayer right first, keep it easy
+reviewed before the group leader sees it. Taken from the Product Vision doc and the Website
+Move Plan, with the group leader's notes: scale back, get prayer right first, keep it easy
 for everyone to reach, email over texts, no phone app for now.
 
 ## Done
@@ -13,7 +13,7 @@ for everyone to reach, email over texts, no phone app for now.
 ## Next
 
 1. **Move today's prayers once.** Copy the current page's prayers and families
-   into the database, after Leo's yes. Who prayed when is tied to Claude
+   into the database, after the group leader's yes. Who prayed when is tied to Claude
    accounts, so those counts start fresh.
 2. **Switch the group.** Share the site link; the current page stays as a
    backup for a few weeks.
@@ -27,7 +27,7 @@ for everyone to reach, email over texts, no phone app for now.
 7. **Calendar.** Group and church events; point the "Sync lifegroup sheet" and
    church event routines at the new database.
 8. **Sheet photo scanning.** A small server function that reads the paper
-   prayer sheet with the Claude API (a few cents a photo). Leo does the
+   prayer sheet with the Claude API (a few cents a photo). the group leader does the
    scanning.
 9. **Rooted Women.** The women's side on the same site and database, sharing
    lifegroup prayers, so the paused prayer sync routine is no longer needed.

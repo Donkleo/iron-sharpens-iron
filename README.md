@@ -31,7 +31,13 @@ deploys to GitHub Pages.
    After you sign in, add everyone else from the site's **Invites** tab.
 3. **Sign-in link address:** Authentication, URL Configuration, set **Site URL**
    to `https://donkleo.github.io/iron-sharpens-iron/` and add the same address
-   under **Redirect URLs**.
+   under **Redirect URLs** (add `http://localhost:5173/iron-sharpens-iron/` too
+   if you run the site on your own computer).
+4. **Email sender:** Supabase's built-in sender only emails the project's own
+   team and only a few times an hour, so members won't get their links until
+   the project sends through a real email account. Under Authentication, Emails,
+   SMTP Settings, turn on custom SMTP with a free sender such as Brevo or
+   Resend, or a Gmail app password. Until then, only you can sign in.
 
 The repo's Actions secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY` are read at
 deploy time. Without them the site builds and shows a setup notice.

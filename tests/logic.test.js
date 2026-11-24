@@ -24,7 +24,7 @@ describe("this week", () => {
     req({ id: "a", list: "lifegroup", family_id: "f1", sheet_date: "2026-11-22", body: "a" }),
     req({ id: "b", list: "lifegroup", family_id: "f1", sheet_date: "2026-11-15", body: "b" }),
     req({ id: "c", list: "lifegroup", family_id: "f2", sheet_date: "2026-11-22", body: "c", status: "answered" }),
-    req({ id: "d", list: "brothers", for_name: "Sam", body: "d" }),
+    req({ id: "d", list: "brothers", for_name: "Alex", body: "d" }),
   ];
   const label = (r) => r.family_id || r.for_name;
 
@@ -52,7 +52,7 @@ describe("I prayed", () => {
     { request_id: "b", member_id: "other", prayed_at: new Date(2026, 10, 10).toISOString() },
   ];
   const by = prayersByRequest(prayers);
-  const r = req({ id: "a", list: "brothers", for_name: "Sam" });
+  const r = req({ id: "a", list: "brothers", for_name: "Alex" });
 
   it("knows when I prayed this week", () => {
     expect(iPrayedThisWeek(by.get("a"), "me", now)).toBe(true);
@@ -79,9 +79,9 @@ describe("grouping and search", () => {
     expect(g[1].items.map((x) => x.id)).toEqual([3, 1]);
   });
   it("searches the name, request and updates", () => {
-    const r = req({ body: "New job interview", for_name: "Sam" });
+    const r = req({ body: "New job interview", for_name: "Alex" });
     const label = (x) => x.for_name;
-    expect(matchesSearch(r, "job sam", label)).toBe(true);
+    expect(matchesSearch(r, "job alex", label)).toBe(true);
     expect(matchesSearch(r, "surgery", label)).toBe(false);
     expect(matchesSearch(r, "surgery", label, () => [{ body: "Surgery went well" }])).toBe(true);
     expect(matchesSearch(r, "  ", label)).toBe(true);
@@ -90,7 +90,7 @@ describe("grouping and search", () => {
 
 describe("small helpers", () => {
   it("cleans family names from the sheet", () => {
-    expect(cleanFamilyName("  The Weeks:  ")).toBe("Weeks");
+    expect(cleanFamilyName("  The Smith:  ")).toBe("Smith");
     expect(cleanFamilyName("Garcia –")).toBe("Garcia");
   });
   it("escapes text before it goes on the page", () => {

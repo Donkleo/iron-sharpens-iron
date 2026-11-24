@@ -7,21 +7,26 @@ function check({ data, error }) {
   return data;
 }
 
+// Supabase returns at most 1,000 rows per call, so read in pages.
+const PAGE = 1000;
+async function all(table, columns, orderBy) {
+  const rows = [];
+  for (let from = 0; ; from += PAGE) {
+    const page = check(await supabase.from(table).select(columns).order(orderBy, { ascending: false }).order("id").range(from, from + PAGE - 1));
+    rows.push(...page);
+    if (page.length < PAGE) return rows;
+  }
+}
+
 export async function loadAll() {
   const [members, families, requests, updates, prayers] = await Promise.all([
-    supabase.from("members").select("id, display_name").order("display_name"),
-    supabase.from("families").select("id, name").order("name"),
-    supabase.from("requests").select("*").order("created_at", { ascending: false }),
-    supabase.from("request_updates").select("*").order("created_at", { ascending: false }),
-    supabase.from("prayers").select("*").order("prayed_at", { ascending: false }),
+    all("members", "id, display_name", "display_name"),
+    all("families", "id, name", "name"),
+    all("requests", "*", "created_at"),
+    all("request_updates", "*", "created_at"),
+    all("prayers", "*", "prayed_at"),
   ]);
-  return {
-    members: check(members),
-    families: check(families),
-    requests: check(requests),
-    updates: check(updates),
-    prayers: check(prayers),
-  };
+  return { members, families, requests, updates, prayers };
 }
 
 export async function amIAdmin() {
@@ -51,7 +56,8 @@ export async function familyId(name, families) {
   const res = await supabase.from("families").insert({ name: name.trim() }).select("id").single();
   if (res.error && res.error.code === "23505") {
     // Someone else added it a moment ago.
-    const again = check(await supabase.from("families").select("id").ilike("name", name.trim()).limit(1));
+    const exact = name.trim().replace(/[\\%_]/g, (c) => "\\" + c);
+    const again = check(await supabase.from("families").select("id").ilike("name", exact).limit(1));
     if (again.length) return again[0].id;
   }
   return check(res).id;

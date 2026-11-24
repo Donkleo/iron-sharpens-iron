@@ -9,10 +9,10 @@ const sheet = sunday.getFullYear() + "-" + String(sunday.getMonth() + 1).padStar
 
 const data = {
   members: [{ id: me, display_name: "Leo" }],
-  families: [{ id: "f1", name: "Weeks" }],
+  families: [{ id: "f1", name: "Smith" }],
   requests: [
     { id: "r1", list: "lifegroup", family_id: "f1", body: "New job <b>soon</b>", sheet_date: sheet, status: "active", created_by: me, created_at: new Date().toISOString() },
-    { id: "r2", list: "brothers", for_name: "Sam", body: "Healing", status: "active", created_by: "someone-else", created_at: new Date().toISOString() },
+    { id: "r2", list: "brothers", for_name: "Alex", body: "Healing", status: "active", created_by: "someone-else", created_at: new Date().toISOString() },
   ],
   updates: [],
   prayers: [],
@@ -83,7 +83,7 @@ describe("signed in", () => {
 
   it("only offers Delete on requests you added", () => {
     const rowsWithDelete = [...app().querySelectorAll(".row")].filter((r) => r.querySelector('[data-act="confirm"]'));
-    expect(rowsWithDelete.map((r) => r.querySelector(".who").textContent)).toEqual(["Weeks"]);
+    expect(rowsWithDelete.map((r) => r.querySelector(".who").textContent)).toEqual(["Smith"]);
   });
 
   it("marks I prayed", async () => {
@@ -94,7 +94,31 @@ describe("signed in", () => {
 
   it("opens the Brothers tab", async () => {
     click('[data-tab="brothers"]');
-    expect(app().textContent).toContain("Sam");
+    expect(app().textContent).toContain("Alex");
     expect(app().textContent).toContain("Add a request for a brother");
+  });
+
+  it("keeps a group open while you share an update", async () => {
+    click('[data-tab="lifegroup"]');
+    const g = app().querySelector("details.person");
+    g.open = true;
+    g.dispatchEvent(new Event("toggle"));
+    click('[data-act="open-update"][data-id="r1"]');
+    const after = app().querySelector("details.person");
+    expect(after.open).toBe(true);
+    expect(after.querySelector('form[data-form="update"]')).not.toBeNull();
+  });
+
+  it("signs in back to the site's home page", async () => {
+    const { supabase } = await import("../src/supabase.js");
+    authCallback("SIGNED_OUT", null);
+    const form = app().querySelector('form[data-form="sign-in"]');
+    form.querySelector("input").value = "Friend@Example.com";
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    expect(supabase.auth.signInWithOtp).toHaveBeenCalledWith({
+      email: "friend@example.com",
+      options: { emailRedirectTo: new URL(import.meta.env.BASE_URL, window.location.origin).href },
+    });
   });
 });

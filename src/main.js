@@ -4,7 +4,7 @@ import * as api from "./api.js";
 import {
   esc, isActive, entryDay, friendlyDay, ago, cleanFamilyName, isEmail, ymd,
   latestByFamily, needsPrayer, prayersByRequest, prayersThisWeek, iPrayedThisWeek,
-  thisWeek, groupBy, matchesSearch, inThisWeek, DAY,
+  thisWeek, groupBy, matchesSearch, inThisWeek, weekIsSheet, DAY,
 } from "./logic.js";
 
 const $ = (s) => document.querySelector(s);
@@ -22,6 +22,8 @@ const state = {
   confirm: null, // request id waiting for delete confirmation
   sent: null, // email a sign-in link was sent to
   loading: false,
+  error: null, // message when loading failed
+  open: new Set(), // family or brother groups the person has opened
   ready: false, // true once we know whether someone is signed in
 };
 
@@ -53,6 +55,7 @@ async function act(fn, okMsg) {
     return true;
   } catch (e) {
     toast(friendlyError(e));
+    render(); // puts back any button that was waiting
     return false;
   }
 }
@@ -62,6 +65,7 @@ async function act(fn, okMsg) {
 async function refresh() {
   if (!state.session) return;
   state.loading = !state.data;
+  state.error = null;
   render();
   try {
     state.member = await api.amIMember();
@@ -70,9 +74,11 @@ async function refresh() {
       state.data = data;
       state.admin = admin;
       state.invites = admin ? await api.loadInvites() : [];
+      if (!admin && state.tab === "group") state.tab = "week";
     }
   } catch (e) {
-    toast(friendlyError(e));
+    if (state.data) toast(friendlyError(e));
+    else state.error = friendlyError(e);
   }
   state.loading = false;
   render();
@@ -97,11 +103,17 @@ function render() {
   if (!state.ready) { app.innerHTML = shell(`<div class="empty">Loading…</div>`); return; }
   if (!state.session) return renderSignIn();
   if (state.member === false) return renderNotInvited();
+  if (state.error && !state.data) {
+    app.innerHTML = shell(`<div class="card"><h2>Couldn't load the prayers</h2><p class="lede">${esc(state.error)}</p>
+      <div class="actions"><button class="btn primary" type="button" data-act="retry">Try again</button></div></div>`);
+    return;
+  }
   if (state.loading || !state.data) {
     app.innerHTML = shell(`<div class="empty">Loading prayers…</div>`);
     return;
   }
-  const views = { week: viewWeek, lifegroup: viewLifegroup, brothers: viewBrothers, group: viewGroup };
+  const views = { week: viewWeek, lifegroup: viewLifegroup, brothers: viewBrothers };
+  if (state.admin) views.group = viewGroup;
   const view = (views[state.tab] || viewWeek)();
   app.innerHTML = shell(tabs() + `<section class="view" role="tabpanel">${view}</section>`);
 }
@@ -243,7 +255,7 @@ function viewWeek() {
       <div class="pulse-foot">${all.length === 0 ? "No requests yet this week." : done === all.length ? "Every request has been prayed for this week." : `${all.length - done} still need someone to pray.`}</div>
     </div>
     <div class="sec">
-      <div class="sec-head"><h2>Lifegroup prayers</h2><span class="eyebrow">${wk.lifegroup.length ? "from the " + esc(friendlyDay(wk.from)) + " sheet on" : ""}</span></div>
+      <div class="sec-head"><h2>Lifegroup prayers</h2><span class="eyebrow">${wk.lifegroup.length ? (weekIsSheet(state.data.requests, wk.from) ? "from the " + esc(friendlyDay(wk.from)) + " sheet" : "added since " + esc(friendlyDay(wk.from))) : ""}</span></div>
       ${wk.lifegroup.length ? `<div class="list">${rows(wk.lifegroup, "week")}</div>` : `<div class="empty">No lifegroup requests this week. Add them on the Lifegroup tab.</div>`}
     </div>
     <div class="sec">
@@ -264,7 +276,7 @@ function viewLifegroup() {
   return `<details class="more"${state.data.requests.some((r) => r.list === "lifegroup") ? "" : " open"}>
       <summary>Add a family request</summary>
       <form class="form" data-form="add-lifegroup" autocomplete="off">
-        <label class="field">Family<input type="text" name="family" list="familyNames" required maxlength="80" placeholder="Weeks"></label>
+        <label class="field">Family<input type="text" name="family" list="familyNames" required maxlength="80" placeholder="Smith"></label>
         <label class="field">Request<textarea name="body" required maxlength="2000" placeholder="What should we pray for?"></textarea></label>
         <label class="field">Prayer sheet date<input type="date" name="sheet_date" value="${ymd(lastSunday())}"></label>
         <div class="actions"><button class="btn primary" type="submit">Add request</button></div>
@@ -300,7 +312,10 @@ function searchBox(which) {
 
 function group(g, ctx) {
   const open = g.items.filter(isActive).length;
-  return `<details class="person"${state.search[ctx] ? " open" : ""}>
+  const key = ctx + ":" + g.key;
+  const busy = g.items.some((r) => r.id === state.confirm || (state.form && state.form.id === r.id && state.form.ctx === ctx));
+  const isOpen = state.search[ctx] || busy || state.open.has(key);
+  return `<details class="person" data-group="${esc(key)}"${isOpen ? " open" : ""}>
     <summary><span class="fam-text"><span class="fam-name">${esc(g.label)}</span><span class="meta">${open} open · ${g.items.length - open} answered</span></span><span class="fam-side"></span></summary>
     <div class="list">${rows(g.items, ctx)}</div>
   </details>`;
@@ -343,6 +358,7 @@ app.addEventListener("click", async (e) => {
   switch (b.dataset.act) {
     case "tab": state.tab = b.dataset.tab; state.form = null; state.confirm = null; render(); window.scrollTo(0, 0); break;
     case "sign-out": await supabase.auth.signOut(); break;
+    case "retry": await refresh(); break;
     case "open-update": state.form = { kind: "update", id, ctx: b.dataset.ctx }; state.confirm = null; render(); focusForm(); break;
     case "open-answer": state.form = { kind: "answer", id, ctx: b.dataset.ctx }; state.confirm = null; render(); focusForm(); break;
     case "close": state.form = null; state.confirm = null; render(); break;
@@ -360,6 +376,13 @@ app.addEventListener("click", async (e) => {
     }
   }
 });
+
+// Remember which family or brother groups are open, so they stay open after a change.
+app.addEventListener("toggle", (e) => {
+  const key = e.target.dataset && e.target.dataset.group;
+  if (!key) return;
+  if (e.target.open) state.open.add(key); else state.open.delete(key);
+}, true);
 
 function focusForm() {
   const t = app.querySelector("form.inline textarea");
@@ -440,8 +463,8 @@ app.addEventListener("submit", async (e) => {
 async function signIn(email) {
   email = String(email || "").trim().toLowerCase();
   if (!isEmail(email)) { toast("That email doesn't look right."); return; }
-  // Send people back to this page (without any old sign-in details in the address).
-  const back = window.location.origin + window.location.pathname;
+  // Send people back to the site's home page (the address Supabase allows).
+  const back = new URL(import.meta.env.BASE_URL, window.location.origin).href;
   const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: back } });
   if (error) { toast(friendlyError(error)); return; }
   state.sent = email;
@@ -457,7 +480,7 @@ if (!configured) {
     const changed = (session?.user?.id || null) !== (state.session?.user?.id || null);
     state.session = session;
     state.ready = true;
-    if (!session) { state.member = null; state.data = null; state.admin = false; state.invites = []; render(); return; }
+    if (!session) { state.member = null; state.data = null; state.admin = false; state.invites = []; state.tab = "week"; state.open.clear(); render(); return; }
     // Run outside the auth callback, as Supabase recommends.
     if (changed) setTimeout(refresh, 0);
   });

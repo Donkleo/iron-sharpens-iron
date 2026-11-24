@@ -41,7 +41,7 @@ export function normalize(s) {
     .trim();
 }
 
-// "The Weeks:" and "weeks" are the same family.
+// "The Smiths:" and "smiths" are the same family.
 export function cleanFamilyName(s) {
   return String(s || "")
     .trim()
@@ -94,12 +94,19 @@ export function needsPrayer(r, list, latest, now = new Date()) {
 // This week: the newest prayer sheet (if it is under two weeks old, else the
 // last seven days), plus every open Brothers request.
 export function weekFrom(requests, now = new Date()) {
-  const sheets = requests.filter((r) => r.list === "lifegroup" && r.sheet_date).map((r) => r.sheet_date).sort();
-  const newest = sheets.pop();
   const today = startOfDay(now).getTime();
+  const todayYmd = ymd(new Date(today));
+  // A sheet date typed in the future is ignored, so it can't hide this week.
+  const sheets = requests.filter((r) => r.list === "lifegroup" && r.sheet_date && r.sheet_date <= todayYmd).map((r) => r.sheet_date).sort();
+  const newest = sheets.pop();
   const twoWeeksAgo = ymd(new Date(today - 13 * DAY));
   const sevenAgo = ymd(new Date(today - 7 * DAY));
   return newest && newest >= twoWeeksAgo ? newest : sevenAgo;
+}
+
+// True when weekFrom() is the date of a real prayer sheet.
+export function weekIsSheet(requests, from) {
+  return requests.some((r) => r.list === "lifegroup" && r.sheet_date === from);
 }
 
 export function thisWeek(requests, labelOf, now = new Date()) {
