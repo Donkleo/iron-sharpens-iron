@@ -9,10 +9,10 @@ function check({ data, error }) {
 
 // Supabase returns at most 1,000 rows per call, so read in pages.
 const PAGE = 1000;
-async function all(table, columns, orderBy) {
+async function all(table, columns, orderBy, ascending = false) {
   const rows = [];
   for (let from = 0; ; from += PAGE) {
-    const page = check(await supabase.from(table).select(columns).order(orderBy, { ascending: false }).order("id").range(from, from + PAGE - 1));
+    const page = check(await supabase.from(table).select(columns).order(orderBy, { ascending }).order("id").range(from, from + PAGE - 1));
     rows.push(...page);
     if (page.length < PAGE) return rows;
   }
@@ -20,8 +20,8 @@ async function all(table, columns, orderBy) {
 
 export async function loadAll() {
   const [members, families, requests, updates, prayers] = await Promise.all([
-    all("members", "id, display_name", "display_name"),
-    all("families", "id, name", "name"),
+    all("members", "id, display_name", "display_name", true),
+    all("families", "id, name", "name", true),
     all("requests", "*", "created_at"),
     all("request_updates", "*", "created_at"),
     all("prayers", "*", "prayed_at"),

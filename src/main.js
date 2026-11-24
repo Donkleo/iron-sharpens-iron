@@ -55,7 +55,6 @@ async function act(fn, okMsg) {
     return true;
   } catch (e) {
     toast(friendlyError(e));
-    render(); // puts back any button that was waiting
     return false;
   }
 }
@@ -369,9 +368,13 @@ app.addEventListener("click", async (e) => {
     case "uninvite": state.confirm = null; await act(() => api.removeInvite(b.dataset.email), "Removed from the invite list."); break;
     case "prayed": {
       b.disabled = true;
-      const mineThisWeek = state.data.prayers.filter((p) => p.request_id === id && p.member_id === myId() && inThisWeek(p.prayed_at));
-      if (mineThisWeek.length) await act(() => api.undoPrayed(mineThisWeek.map((p) => p.id)));
-      else await act(() => api.markPrayed(id), "Thank you for praying.");
+      try {
+        const mineThisWeek = state.data.prayers.filter((p) => p.request_id === id && p.member_id === myId() && inThisWeek(p.prayed_at));
+        if (mineThisWeek.length) await act(() => api.undoPrayed(mineThisWeek.map((p) => p.id)));
+        else await act(() => api.markPrayed(id), "Thank you for praying.");
+      } finally {
+        b.disabled = false;
+      }
       break;
     }
   }

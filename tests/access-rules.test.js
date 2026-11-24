@@ -261,6 +261,16 @@ describe("admins", () => {
     expect((await as("early", "select public.is_member() as ok")).rows[0].ok).toBe(true);
   });
 
+  it("can remove a member who answered a request", async () => {
+    await db.exec("insert into public.invites (email, name) values ('answerer@example.com', 'Answerer')");
+    ids.answerer = await signUp("answerer@example.com");
+    const id = (await as("brother", "insert into public.requests (list, for_name, body) values ('brothers', 'Alex', 'Peace') returning id")).rows[0].id;
+    await as("answerer", "update public.requests set status = 'answered', answered_note = 'Yes' where id = $1", [id]);
+    await db.query("delete from auth.users where id = $1", [ids.answerer]);
+    const r = await db.query("select status, answered_by, answered_note from public.requests where id = $1", [id]);
+    expect(r.rows).toEqual([{ status: "answered", answered_by: null, answered_note: "Yes" }]);
+  });
+
   it("can remove a member who has requests", async () => {
     await as("early", "insert into public.requests (list, for_member, body) values ('brothers', $1, 'x')", [ids.early]);
     await db.query("delete from auth.users where id = $1", [ids.early]);

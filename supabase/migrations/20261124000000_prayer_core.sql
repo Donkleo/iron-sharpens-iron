@@ -191,8 +191,9 @@ begin
       new.answered_at := now();
       new.answered_by := auth.uid();
     else
+      -- Already answered: keep the original time. answered_by is left alone
+      -- (no one can write it), so removing that person's account still works.
       new.answered_at := old.answered_at;
-      new.answered_by := old.answered_by;
     end if;
   else
     new.answered_at := null;
