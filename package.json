@@ -1,0 +1,25 @@
+{
+  "name": "iron-sharpens-iron",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Prayer site for the Iron Sharpens Iron lifegroup.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.119.2"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.6.0",
+    "jsdom": "^31.0.1",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  }
+}
