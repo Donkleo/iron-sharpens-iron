@@ -59,7 +59,7 @@ describe("sign-up", () => {
 });
 
 describe("anon key", () => {
-  const tables = ["invites", "members", "families", "requests", "request_updates", "prayers", "events"];
+  const tables = ["invites", "members", "families", "requests", "request_updates", "prayers", "events", "person_prayers", "week_extras"];
   for (const t of tables) {
     it(`cannot read ${t}`, async () => {
       await expect(as("anon", `select * from public.${t}`)).rejects.toThrow(/permission denied/);
@@ -473,6 +473,65 @@ describe("calendar sync key in a header", () => {
       { external_id: "h3", kind: "open", ends_on: null, time_text: null, t: 200, l: 200, url: null },
       { external_id: "h4", kind: null, ends_on: null, time_text: null, t: 7, l: null, url: null },
     ]);
+  });
+});
+
+describe("weekly partners", () => {
+  let famA;
+  it("lets a member pick a family, filling in his first name and keeping it in this week's circle", async () => {
+    famA = (await db.query("insert into public.families (name, since) values ('Weekly A', null) returning id")).rows[0].id;
+    const r = await as("brother", "select public.set_my_family($1, null, 'Ann') as id", [famA]);
+    expect(r.rows[0].id).toBe(famA);
+    const f = (await db.query("select husband, wife, since from public.families where id = $1", [famA])).rows[0];
+    expect(f).toEqual({ husband: "Brother", wife: "Ann", since: null });
+    expect((await as("admin", "select family_id from public.members where id = $1", [ids.brother])).rows[0].family_id).toBe(famA);
+  });
+
+  it("adds a family typed by name, joining the circle from today", async () => {
+    const r = await as("admin", "select public.set_my_family(null, '  Weekly B ', null) as id");
+    const f = (await db.query("select name, husband, since from public.families where id = $1", [r.rows[0].id])).rows[0];
+    expect(f.name).toBe("Weekly B");
+    expect(f.husband).toBe("Admin");
+    expect(f.since).not.toBeNull();
+    // The same name again finds it instead of adding a second one.
+    expect((await as("brother", "select public.set_my_family(null, 'weekly b', null) as id")).rows[0].id).toBe(r.rows[0].id);
+    await as("brother", "select public.set_my_family($1, null, null)", [famA]);
+  });
+
+  it("never lets anyone set someone else's family directly", async () => {
+    await expect(as("brother", "update public.members set family_id = null where id = $1", [ids.brother])).rejects.toThrow(/permission denied/);
+    await expect(as("removed", "select public.set_my_family($1, null, null)", [famA])).rejects.toThrow(/Only group members/);
+    await expect(as("anon", "select public.set_my_family($1, null, null)", [famA])).rejects.toThrow(/permission denied/);
+    await expect(as("brother", "select public.set_my_family(null, null, null)")).rejects.toThrow(/Pick your family/);
+  });
+
+  it("keeps I prayed for him marks to their owner, and not for yourself", async () => {
+    await as("brother", "insert into public.person_prayers (member_id) values ($1)", [ids.admin]);
+    await expect(as("brother", "insert into public.person_prayers (member_id) values ($1)", [ids.brother])).rejects.toThrow(/not_self/);
+    await expect(as("brother", "insert into public.person_prayers (member_id, prayed_by) values ($1, $2)", [ids.brother, ids.admin])).rejects.toThrow(/permission denied/);
+    const seen = await as("admin", "select prayed_by from public.person_prayers");
+    expect(seen.rows.map((x) => x.prayed_by)).toEqual([ids.brother]);
+    // Someone else can't take it away.
+    await as("admin", "delete from public.person_prayers");
+    expect((await db.query("select count(*)::int as n from public.person_prayers")).rows[0].n).toBe(1);
+    await as("brother", "delete from public.person_prayers");
+    expect((await db.query("select count(*)::int as n from public.person_prayers")).rows[0].n).toBe(0);
+  });
+
+  it("keeps Also praying for picks private, once per week each", async () => {
+    await as("brother", "insert into public.week_extras (week_of, family_id) values ('2026-11-22', $1)", [famA]);
+    await expect(as("brother", "insert into public.week_extras (week_of, family_id) values ('2026-11-22', $1)", [famA])).rejects.toThrow(/week_extras_once/);
+    await expect(as("brother", "insert into public.week_extras (week_of) values ('2026-11-22')")).rejects.toThrow(/week_extras_one/);
+    await expect(as("brother", "insert into public.week_extras (member_id, week_of, family_id) values ($1, '2026-11-22', $2)", [ids.admin, famA])).rejects.toThrow(/permission denied/);
+    expect((await as("admin", "select * from public.week_extras")).rows).toEqual([]);
+    expect((await as("brother", "select * from public.week_extras")).rows.length).toBe(1);
+    await as("admin", "delete from public.week_extras");
+    expect((await db.query("select count(*)::int as n from public.week_extras")).rows[0].n).toBe(1);
+  });
+
+  it("shuts out a removed member", async () => {
+    expect((await as("removed", "select * from public.person_prayers")).rows).toEqual([]);
+    await expect(as("removed", "insert into public.week_extras (week_of, family_id) values ('2026-11-22', $1)", [famA])).rejects.toThrow(/row-level security/);
   });
 });
 

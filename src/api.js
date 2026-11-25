@@ -19,15 +19,47 @@ async function all(table, columns, orderBy, ascending = false) {
 }
 
 export async function loadAll() {
-  const [members, families, requests, updates, prayers, events] = await Promise.all([
+  const [members, families, requests, updates, prayers, events, weekly] = await Promise.all([
     all("members", "id, display_name", "display_name", true),
     all("families", "id, name", "name", true),
     all("requests", "*", "created_at"),
     all("request_updates", "*", "created_at"),
     all("prayers", "*", "prayed_at"),
     loadEvents(),
+    loadWeekly(),
   ]);
-  return { members, families, requests, updates, prayers, events: events || [], calendarReady: events !== null };
+  // Add each person's family, and each family's names and circle, when the
+  // weekly partners step has run.
+  const link = new Map((weekly?.links || []).map((m) => [m.id, m.family_id]));
+  const fam = new Map((weekly?.families || []).map((f) => [f.id, f]));
+  return {
+    members: members.map((m) => ({ ...m, family_id: link.get(m.id) || null })),
+    families: families.map((f) => ({ husband: null, wife: null, since: null, pray_for: null, ...f, ...fam.get(f.id) })),
+    requests, updates, prayers,
+    events: events || [], calendarReady: events !== null,
+    personPrayers: weekly?.personPrayers || [], extras: weekly?.extras || [], weeklyReady: weekly !== null,
+  };
+}
+
+// True when a table or column isn't there yet because a setup step hasn't run.
+const notSetUp = (e) => !!e && (["PGRST205", "PGRST204", "42P01", "42703"].includes(e.code)
+  || /could not find the (table|column)|does not exist/i.test(e.message || ""));
+
+// The weekly partners come from their own setup steps (README steps 8 and 9). Until
+// it has run, everything else still loads (null).
+async function loadWeekly() {
+  try {
+    const [links, families, personPrayers, extras] = await Promise.all([
+      all("members", "id, family_id", "id", true),
+      all("families", "id, husband, wife, since, pray_for", "id", true),
+      all("person_prayers", "*", "prayed_at"),
+      all("week_extras", "*", "created_at"),
+    ]);
+    return { links, families, personPrayers, extras };
+  } catch (e) {
+    if (notSetUp(e)) return null;
+    throw e;
+  }
 }
 
 // The calendar's table comes from its own setup step. Until that has run,
@@ -36,7 +68,7 @@ async function loadEvents() {
   try {
     return await all("events", "*", "starts_on", true);
   } catch (e) {
-    if (e && (e.code === "PGRST205" || e.code === "42P01" || /could not find the table|does not exist/i.test(e.message || ""))) return null;
+    if (notSetUp(e)) return null;
     throw e;
   }
 }
@@ -119,4 +151,31 @@ export async function deleteEvent(id) {
 export async function setEventHidden(id, hidden) {
   const rows = check(await supabase.from("events").update({ hidden }).eq("id", id).select("id"));
   if (!rows.length) throw new Error("Only an admin can hide church and sheet events.");
+}
+
+// ----- your family and brother each week -----
+
+// Pick your family from the list (id), or add it by name. The wife's first
+// name is optional.
+export async function setMyFamily({ id = null, name = null, wife = null }) {
+  return check(await supabase.rpc("set_my_family", { p_family: id, p_name: name, p_wife: wife }));
+}
+
+export async function prayForPerson(memberId) {
+  check(await supabase.from("person_prayers").insert({ member_id: memberId }));
+}
+
+export async function undoPersonPrayers(ids) {
+  check(await supabase.from("person_prayers").delete().in("id", ids));
+}
+
+export async function addExtra(fields) {
+  const res = await supabase.from("week_extras").insert(fields);
+  // Already on your list this week: nothing to do.
+  if (res.error && res.error.code === "23505") return;
+  check(res);
+}
+
+export async function removeExtra(id) {
+  check(await supabase.from("week_extras").delete().eq("id", id));
 }

@@ -18,6 +18,10 @@ for everyone to reach, email over texts, no phone app for now.
   group events anyone can add, sheet events with address and Maps, "Add to
   my calendar", and Coming up on This week. The invite list moved to a
   button at the bottom of the page so the tabs match the app.
+- [x] **Your family and brother each week:** pick your family once; each
+  Sunday you get a family and a brother to pray for, "I prayed for Mike",
+  "Also praying for" for the week, who's praying for each brother, and who
+  prayed for you and your family.
 
 ## Next
 
@@ -26,9 +30,9 @@ for everyone to reach, email over texts, no phone app for now.
    accounts, so those counts start fresh.
 2. **Switch the group.** Share the site link; the current page stays as a
    backup for a few weeks.
-3. **Live refresh.** New prayers and "I prayed" show up without reloading.
-4. **Partners and "Your brother".** The app's weekly partner family and
-   brother for each person; needs a small database change.
+3. **Encouragement notes.** Send a brother a short note that shows on his
+   page and his This week card, like the app.
+4. **Live refresh.** New prayers and "I prayed" show up without reloading.
 5. **Calendar syncs.** Point the "Sync lifegroup sheet" and church event
    routines at the site (`docs/calendar-sync.md`), after the group leader's yes.
 6. **Sheet photo scanning.** A small server function that reads the paper
