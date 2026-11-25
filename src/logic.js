@@ -160,3 +160,120 @@ export function esc(s) {
 }
 
 export const isEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
+
+// ---------- encouragement after "I prayed" (same verses as the app) ----------
+
+export const ENCOURAGE = [
+  "The prayer of a righteous person has great power. James 5:16",
+  "Pray without ceasing. 1 Thessalonians 5:17",
+  "Bear one another’s burdens. Galatians 6:2",
+  "Cast all your anxieties on him, because he cares for you. 1 Peter 5:7",
+  "The Lord is near to all who call on him. Psalm 145:18",
+  "Continue steadfastly in prayer, being watchful in it with thanksgiving. Colossians 4:2",
+  "Rejoice in hope, be patient in tribulation, be constant in prayer. Romans 12:12",
+  "Ask, and it will be given to you; seek, and you will find. Matthew 7:7",
+  "In everything by prayer and supplication with thanksgiving let your requests be made known to God. Philippians 4:6",
+  "Where two or three are gathered in my name, there am I among them. Matthew 18:20",
+];
+
+// Hands out the verses in turn, starting at a random one.
+export function encourager(start = Math.floor(Math.random() * ENCOURAGE.length)) {
+  let i = start;
+  return () => ENCOURAGE[((i++ % ENCOURAGE.length) + ENCOURAGE.length) % ENCOURAGE.length];
+}
+
+// ---------- updates bring a prayer back ----------
+
+const time = (iso) => (iso ? new Date(iso).getTime() : 0);
+
+export function myLastPrayer(list = [], myId) {
+  return list.filter((p) => p.member_id === myId).map((p) => p.prayed_at).sort((a, b) => time(b) - time(a))[0] || null;
+}
+
+export function latestUpdate(ups = []) {
+  return ups.slice().sort((a, b) => time(b.created_at) - time(a.created_at))[0] || null;
+}
+
+// Someone else shared news on an open prayer after I last prayed for it
+// (in the last two weeks), so it comes back to me as "Pray again".
+export function updatedForMe(r, list = [], ups = [], myId, now = new Date()) {
+  if (!myId || !isActive(r)) return false;
+  const mine = myLastPrayer(list, myId);
+  const u = latestUpdate(ups);
+  return !!(mine && u && u.created_by !== myId && time(u.created_at) > time(mine) && time(now) - time(u.created_at) < 14 * DAY);
+}
+
+// "Prayed this week" only counts when nothing new was shared since.
+export function prayedCurrent(r, list, ups, myId, now = new Date()) {
+  return iPrayedThisWeek(list, myId, now) && !updatedForMe(r, list, ups, myId, now);
+}
+
+// Undoing "I prayed" takes back only the prayers made after the newest
+// update, so a "Pray again" goes back to "Pray again". Otherwise it takes
+// back this week's.
+export function undoIds(list = [], ups = [], myId, now = new Date()) {
+  const week = list.filter((p) => p.member_id === myId && inThisWeek(p.prayed_at, now));
+  const u = latestUpdate(ups);
+  const after = u && u.created_by !== myId ? week.filter((p) => time(p.prayed_at) > time(u.created_at)) : [];
+  return (after.length && after.length < week.length ? after : week).map((p) => p.id);
+}
+
+// ---------- similar prayers ----------
+
+// Who a request is for: a family, a member, or a name.
+export function ownerKey(r) {
+  if (r.list === "lifegroup") return "f:" + r.family_id;
+  return r.for_member ? "m:" + r.for_member : "n:" + normalize(r.for_name);
+}
+
+const STOP = new Set(("about after again also always answer away been being both bring continue continued could each even every from give have help into just keep know like lord made make many more most much need needs next please pray prayed prayer prayers praying praise really some still such than thank thanks that their them then there these they this those through very want week weeks well were what when where which while will with would your god jesus christ family families").split(" "));
+
+export function stems(text) {
+  return new Set(normalize(text).split(" ").filter((w) => w.length >= 4 && !STOP.has(w)).map((w) => w.slice(0, 5)));
+}
+
+// Other open prayers from the same family or person that share a key word.
+export function similarOpen(r, requests) {
+  const s = stems(r.body);
+  if (!s.size) return [];
+  const k = ownerKey(r);
+  return requests
+    .filter((x) => x.id !== r.id && isActive(x) && ownerKey(x) === k && [...stems(x.body)].some((w) => s.has(w)))
+    .sort((a, b) => entryDay(b).localeCompare(entryDay(a)));
+}
+
+// ---------- this week's numbers ----------
+
+// How many of this week's requests someone prayed for, and how many prayers
+// from how many people since Sunday.
+export function weekPulse(all, requests, by, now = new Date()) {
+  const covered = all.filter((r) => prayersThisWeek(by.get(r.id), now).length > 0).length;
+  const week = requests.flatMap((r) => prayersThisWeek(by.get(r.id), now));
+  return { total: all.length, covered, lifted: week.length, people: new Set(week.map((p) => p.member_id)).size };
+}
+
+// Updates and answers from the last 7 days, newest first.
+export function weekNews(requests, updatesFor, now = new Date()) {
+  const recent = (iso) => !!iso && Math.floor((startOfDay(now) - startOfDay(iso)) / DAY) < 7;
+  const news = [];
+  for (const r of requests) {
+    if (!isActive(r) && recent(r.answered_at)) news.push({ r, at: r.answered_at, by: r.answered_by, kind: "answer", words: r.answered_note });
+    const u = isActive(r) ? latestUpdate(updatesFor(r)) : null;
+    if (u && recent(u.created_at)) news.push({ r, at: u.created_at, by: u.created_by, kind: "update", words: u.body });
+  }
+  return news.sort((a, b) => time(b.at) - time(a.at));
+}
+
+// ---------- dates ----------
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// "Nov", or "Nov ’25" for another year.
+export function monthLabel(ym, now = new Date()) {
+  const [y, m] = String(ym).split("-").map(Number);
+  return MONTHS[m - 1] + (y !== now.getFullYear() ? " ’" + String(y).slice(2) : "");
+}
+
+export function longMonth(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}

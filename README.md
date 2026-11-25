@@ -1,8 +1,8 @@
 # Iron Sharpens Iron
 
 A small prayer site for our lifegroup and brothers: this week's prayers, who
-has prayed, updates and answered prayers. Members sign in with a link sent to
-their email; only people on the invite list can get in.
+has prayed, updates and answered prayers. Members sign in with a code (or a link) sent
+to their email; only people on the invite list can get in.
 
 - **Site:** https://donkleo.github.io/iron-sharpens-iron/
 - **Code:** Vite and plain JavaScript in `src/`
@@ -46,6 +46,18 @@ deploys to GitHub Pages.
    the project sends through a real email account. Under Authentication, Emails,
    SMTP Settings, turn on custom SMTP with a free sender such as Brevo or
    Resend, or a Gmail app password. Until then, only you can sign in.
+5. **Sign-in code in the email:** Supabase's emails only have a link at
+   first. A link can open inside the mail app's own browser, which forgets
+   the sign-in, so add the code too. Do this for two templates, **Magic Link**
+   (people who signed in before) and **Confirm signup** (first sign-in):
+   - Open the template's text, which is plain text on GitHub:
+     - Magic Link: https://raw.githubusercontent.com/Donkleo/iron-sharpens-iron/main/docs/email-templates/magic-link.html
+     - Confirm signup: https://raw.githubusercontent.com/Donkleo/iron-sharpens-iron/main/docs/email-templates/confirm-signup.html
+   - On a phone, press and hold the text, tap **Select All**, then **Copy**.
+   - In the Supabase dashboard, open Authentication, Emails, **Templates**,
+     pick the template, and set **Subject** to `Your Iron Sharpens Iron sign-in code`.
+   - In **Message body**, select everything that is there, delete it, paste
+     the contents you copied, and press **Save**.
 
 The repo's Actions secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY` are read at
 deploy time. Without them the site builds and shows a setup notice.

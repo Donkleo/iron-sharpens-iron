@@ -105,3 +105,82 @@ describe("small helpers", () => {
     expect(ago(null, now)).toBe("never");
   });
 });
+
+import {
+  ENCOURAGE, encourager, updatedForMe, prayedCurrent, undoIds, similarOpen, ownerKey,
+  weekPulse, weekNews, monthLabel,
+} from "../src/logic.js";
+
+describe("verse after I prayed", () => {
+  it("hands out every verse in turn", () => {
+    const next = encourager(0);
+    const seen = ENCOURAGE.map(() => next());
+    expect(seen).toEqual(ENCOURAGE);
+    expect(next()).toBe(ENCOURAGE[0]);
+  });
+});
+
+describe("updates bring a prayer back", () => {
+  const r = req({ id: "a", list: "brothers", for_name: "Alex" });
+  const mine = (id, d) => ({ id, request_id: "a", member_id: "me", prayed_at: new Date(2026, 10, d, 9).toISOString() });
+  const upd = (d, by = "other") => ({ request_id: "a", created_by: by, created_at: new Date(2026, 10, d, 10).toISOString(), body: "news" });
+
+  it("shows Pray again when someone shares news after I prayed", () => {
+    expect(updatedForMe(r, [mine("p1", 22)], [upd(23)], "me", now)).toBe(true);
+    expect(prayedCurrent(r, [mine("p1", 22)], [upd(23)], "me", now)).toBe(false);
+  });
+  it("ignores my own updates, older news and answered prayers", () => {
+    expect(updatedForMe(r, [mine("p1", 22)], [upd(23, "me")], "me", now)).toBe(false);
+    expect(updatedForMe(r, [mine("p1", 24)], [upd(23)], "me", now)).toBe(false);
+    expect(updatedForMe({ ...r, status: "answered" }, [mine("p1", 22)], [upd(23)], "me", now)).toBe(false);
+    expect(updatedForMe(r, [], [upd(23)], "me", now)).toBe(false);
+  });
+  it("undo after Pray again takes back only the new prayer", () => {
+    expect(undoIds([mine("p1", 22), mine("p2", 24)], [upd(23)], "me", now)).toEqual(["p2"]);
+    expect(undoIds([mine("p1", 22), mine("p2", 24)], [], "me", now).sort()).toEqual(["p1", "p2"]);
+    expect(undoIds([mine("p1", 22)], [upd(23)], "me", now)).toEqual(["p1"]);
+  });
+});
+
+describe("similar prayers", () => {
+  const rs = [
+    req({ id: "1", list: "lifegroup", family_id: "f1", body: "Job interview Monday" }),
+    req({ id: "2", list: "lifegroup", family_id: "f1", body: "Second interview went well" }),
+    req({ id: "3", list: "lifegroup", family_id: "f2", body: "Interview for a new role" }),
+    req({ id: "4", list: "lifegroup", family_id: "f1", body: "Interview again", status: "answered" }),
+    req({ id: "5", list: "lifegroup", family_id: "f1", body: "Healing for Grandma" }),
+  ];
+  it("finds open prayers for the same family that share a word", () => {
+    expect(similarOpen(rs[0], rs).map((r) => r.id)).toEqual(["2"]);
+  });
+  it("keys people by member or by name", () => {
+    expect(ownerKey({ list: "brothers", for_member: "m1" })).toBe("m:m1");
+    expect(ownerKey({ list: "brothers", for_name: " Alex " })).toBe("n:alex");
+  });
+});
+
+describe("this week's numbers and news", () => {
+  const rs = [
+    req({ id: "a", list: "brothers", for_name: "A" }),
+    req({ id: "b", list: "brothers", for_name: "B" }),
+    req({ id: "c", list: "brothers", for_name: "C", status: "answered", answered_at: new Date(2026, 10, 24).toISOString(), answered_by: "x", answered_note: "Yes" }),
+    req({ id: "d", list: "brothers", for_name: "D", status: "answered", answered_at: new Date(2026, 9, 1).toISOString() }),
+  ];
+  const by = prayersByRequest([
+    { request_id: "a", member_id: "m1", prayed_at: new Date(2026, 10, 23).toISOString() },
+    { request_id: "a", member_id: "m2", prayed_at: new Date(2026, 10, 24).toISOString() },
+    { request_id: "b", member_id: "m1", prayed_at: new Date(2026, 10, 10).toISOString() },
+  ]);
+  it("counts requests covered, prayers and people since Sunday", () => {
+    expect(weekPulse(rs.slice(0, 2), rs, by, now)).toEqual({ total: 2, covered: 1, lifted: 2, people: 2 });
+  });
+  it("lists the last week's updates and answers, newest first", () => {
+    const ups = { b: [{ request_id: "b", created_by: "m1", created_at: new Date(2026, 10, 25, 8).toISOString(), body: "Better" }] };
+    const news = weekNews(rs, (r) => ups[r.id] || [], now);
+    expect(news.map((n) => [n.r.id, n.kind])).toEqual([["b", "update"], ["c", "answer"]]);
+  });
+  it("labels months, with the year when it differs", () => {
+    expect(monthLabel("2026-11", now)).toBe("Nov");
+    expect(monthLabel("2025-12", now)).toBe("Dec ’25");
+  });
+});
