@@ -136,6 +136,18 @@ details.more > .form { border: 0; border-top: 1px solid var(--line); border-radi
 .pulse-btn { margin-left: auto; }
 .mecard { display: grid; gap: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .my-updates { display: grid; gap: 6px; }
+/* Your family and brother each week (same as the app) */
+.weekfam { display: grid; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.weekfam .sec-head, .mecard > .sec-head { margin: 0; }
+.weekfam h2, .mecard > .sec-head h2 { font-size: 1.05rem; }
+.famblock { display: grid; gap: 6px; }
+.famblock + .famblock, .famblock + .brother, .brother + .brother, .brother + .famblock { padding-top: 8px; border-top: 1px dashed var(--line); }
+.famblock-head, .brother { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.brother-text { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.also { margin-top: 4px; }
+.weekbox { display: grid; gap: 4px; padding: 8px 12px; border-left: 3px solid var(--steel); background: var(--steel-soft); border-radius: 4px; }
+details.addextra > summary { font-weight: 500; font-size: 0.9rem; padding: 8px 12px; }
+details.addextra > .form-plain { padding: 0 12px 12px; display: grid; gap: 8px; }
 .my-updates + .prayed-for-me { padding-top: 10px; border-top: 1px solid var(--line); }
 .prayed-for-me { font-weight: 600; }
 .whoami { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--line); }

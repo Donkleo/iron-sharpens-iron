@@ -90,6 +90,16 @@ deploys to GitHub Pages.
      returned".
 
    Then set up the Google Sheet script with `docs/sheet-sync.md`.
+9. **Weekly family and brother:** run the next file the same way as step 1,
+   after step 8.
+   - Open the file as plain text:
+     https://raw.githubusercontent.com/Donkleo/iron-sharpens-iron/main/supabase/migrations/20261126000000_weekly_partners.sql
+   - Select all of the text and copy it, then paste it into a new
+     **SQL Editor** query and press **Run**. It should say "Success. No rows
+     returned".
+
+   Until steps 8 and 9 run, This week works as before. After that, each person
+   picks their family once on This week.
 
 The repo's Actions secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY` are read at
 deploy time. Without them the site builds and shows a setup notice.

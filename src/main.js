@@ -8,6 +8,8 @@ import {
   encourager, latestUpdate, updatedForMe, prayedCurrent, undoIds, similarOpen, ownerKey,
   weekPulse, weekNews, monthLabel, longMonth,
   upcomingEvents, eventsFor, dateRange, dateBlock, eventMonth, calendarLink, mapsLink, safeUrl,
+  familyLabel, weekOf, joinsNextWeek, partnerFamily, prayingFamilies, memberOfFamily, familyKey,
+  familyPrayers, prayersForPerson, personUndoIds, myExtras,
 } from "./logic.js";
 
 const $ = (s) => document.querySelector(s);
@@ -47,6 +49,7 @@ const state = {
   when: "upcoming", // Calendar: "upcoming", "past" or "hidden" (admins)
   openEvent: null, // the sheet event whose details are showing
   eventDraft: null, // what was typed in Add a group event, kept if saving fails
+  picking: false, // true while changing your family
 };
 
 const nextVerse = encourager();
@@ -119,7 +122,32 @@ function derive() {
     ups.get(u.request_id).push(u);
   }
   D = { by: prayersByRequest(state.data.prayers), ups, latest: latestByFamily(state.data.requests) };
+  // Your family, and the family and brother you pray for this week.
+  const d = state.data;
+  const me = d.members.find((m) => m.id === myId()) || null;
+  const fam = me?.family_id ? d.families.find((f) => f.id === me.family_id) || null : null;
+  const partner = fam ? partnerFamily(d.families, fam.id) : null;
+  const ex = myExtras(d.extras || [], myId());
+  const brother = partner ? memberOfFamily(d.members, partner.id) : null;
+  D.week = {
+    me, fam, partner, brother,
+    // Leave out an extra that's now your own family or this week's partner
+    // (after a mid-week change of family).
+    extraFams: ex.families.filter((x) => x.family_id !== fam?.id && x.family_id !== partner?.id && d.families.some((f) => f.id === x.family_id)),
+    extraMen: ex.members.filter((x) => x.for_member !== brother?.id && x.for_member !== myId() && d.members.some((m) => m.id === x.for_member)),
+  };
+  // Who prays for each family this week, worked out once per redraw.
+  D.prayingFor = new Map();
+  for (const [fid, fams] of prayingFamilies(d.families)) {
+    D.prayingFor.set(fid, fams.flatMap((f) => d.members.filter((m) => m.family_id === f.id)));
+  }
 }
+// Who prayed for a person this week: for him, or for any of his requests.
+const whoPrayedFor = (memberId) => prayersForPerson(memberId, state.data.personPrayers || [], state.data.requests, D.by);
+const iPrayedFor = (memberId) => whoPrayedFor(memberId).includes(myId());
+// The brothers whose family prays for this person's family this week.
+const prayingFor = (m) => (m?.family_id && D.prayingFor.get(m.family_id)) || [];
+const onMyList = (memberId) => D.week.brother?.id === memberId || D.week.extraMen.some((x) => x.for_member === memberId);
 const prayersOf = (r) => D.by.get(r.id) || [];
 const updatesFor = (r) => D.ups.get(r.id) || [];
 const isUpdated = (r) => updatedForMe(r, prayersOf(r), updatesFor(r), myId());
@@ -183,8 +211,9 @@ function shell(inner) {
 
 function whoAmI() {
   const me = state.data?.members.find((m) => m.id === myId());
-  return `<div class="whoami"><span class="meta">You’re ${esc(me?.display_name || state.session?.user?.email || "")}</span>
-    <span class="actions">${state.admin ? `<button class="btn quiet small" type="button" data-act="tab" data-tab="group"${state.tab === "group" ? ` aria-current="page"` : ""}>Invite list</button>` : ""}<button class="btn quiet small" type="button" data-act="sign-out">Sign out</button></span></div>`;
+  const fam = state.data?.weeklyReady && me?.family_id ? state.data.families.find((f) => f.id === me.family_id) : null;
+  return `<div class="whoami"><span class="meta">You’re ${esc(me?.display_name || state.session?.user?.email || "")}${fam ? ` · ${esc(fam.name)} family` : ""}</span>
+    <span class="actions">${fam && !state.picking ? `<button class="btn quiet small" type="button" data-act="change-family">Change family</button>` : ""}${state.admin ? `<button class="btn quiet small" type="button" data-act="tab" data-tab="group"${state.tab === "group" ? ` aria-current="page"` : ""}>Invite list</button>` : ""}<button class="btn quiet small" type="button" data-act="sign-out">Sign out</button></span></div>`;
 }
 const footer = () => `<footer class="foot">${whoAmI()}</footer>`;
 
@@ -395,24 +424,189 @@ function weekList(all) {
     + (done.length ? `<div class="prayed-head"><span class="sub">You prayed for these this week ✓</span><span class="meta">${done.length}</span></div>${rows(done, "week", { showWho: true, compact: true })}` : "");
 }
 
+// ----- your family and brother each week -----
+
+// One family to pray for: its names and its prayers from the latest sheet.
+function famBlock(f, extra = "") {
+  const rs = familyPrayers(state.data.requests, f.id, D.latest);
+  const couple = familyLabel(f);
+  return `<div class="famblock">
+    <div class="famblock-head"><span class="fam-name">${esc(f.name)}${couple ? ` <span class="meta">· ${esc(couple)}</span>` : ""}</span>${extra}</div>
+    ${rs.length ? rows(rs, "fam", { compact: true })
+      : `<p class="meta">No requests from the ${esc(f.name)} family on the sheet yet. Pray for them as a couple: their marriage, their home and their walk with the Lord.</p>`}
+  </div>`;
+}
+
+// "I prayed for Mike": for the man himself, not only his requests.
+function personPrayBtn(m) {
+  if (!state.data.weeklyReady || !m?.id || m.id === myId()) return "";
+  const first = firstName(m.display_name);
+  const mine = iPrayedFor(m.id);
+  return `<button class="btn small ${mine ? "prayed" : ""}" type="button" data-act="pray-person" data-id="${esc(m.id)}" aria-pressed="${mine}" title="${mine ? "Tap to undo" : `Mark that you prayed for ${esc(first)}`}">${mine ? `Prayed for ${esc(first)} ✓` : `\u{1F64F} I prayed for ${esc(first)}`}</button>`;
+}
+
+const openCount = (memberId) => state.data.requests.filter((r) => r.list === "brothers" && r.for_member === memberId && isActive(r)).length;
+
+// A brother on your list: his name (opens his page), his requests, the button.
+function brotherLine(m, label, extra = "") {
+  const n = openCount(m.id);
+  return `<div class="brother">
+    <span class="brother-text"><span class="sub">${esc(label)}</span>
+      <button class="linkish" type="button" data-man="m:${esc(m.id)}">${esc(m.display_name)}</button>
+      <span class="meta">· ${n ? plural(n, "open request") : "no requests yet"}</span></span>
+    <span class="actions">${personPrayBtn(m)}${extra}</span>
+  </div>`;
+}
+
+const memberById = (id) => state.data.members.find((m) => m.id === id) || null;
+const familyById = (id) => state.data.families.find((f) => f.id === id) || null;
+const removeBtn = (x, name) => `<button class="btn quiet small" type="button" data-act="extra-remove" data-id="${esc(x.id)}" aria-label="Take ${esc(name)} off your list">Remove</button>`;
+
+// Pick your family once, like the app's "Which family is yours?".
+function familyPicker() {
+  const W = D.week;
+  const fams = state.data.families.slice().sort((a, b) => familyKey(a.name).localeCompare(familyKey(b.name)));
+  return `<form class="weekfam" data-form="my-family" autocomplete="off">
+    <div class="sec-head"><h2>Which family is yours?</h2></div>
+    <p class="meta">Pick it once. Each Sunday you’ll get another family and a brother to pray for, and another family prays for yours.</p>
+    <label class="field">Your family<select name="family" required>
+      <option value="">Pick your family…</option>
+      ${fams.map((f) => `<option value="${esc(f.id)}"${W.fam?.id === f.id ? " selected" : ""}>${esc(f.name)}</option>`).join("")}
+      <option value="new">My family isn’t listed</option>
+    </select></label>
+    <label class="field new-family" hidden>Family name<input type="text" name="name" maxlength="80" placeholder="Smith" autocapitalize="words"></label>
+    <label class="field">Your wife’s first name <span class="meta">(optional)</span><input type="text" name="wife" maxlength="80" autocapitalize="words"></label>
+    <p class="meta">Her name is only used if the family list doesn’t have it yet.</p>
+    <div class="actions"><button class="btn primary small" type="submit">This is my family</button>${state.picking ? `<button class="btn quiet small" type="button" data-act="pick-cancel">Cancel</button>` : ""}</div>
+  </form>`;
+}
+
+// The top of the This week card.
+function weekTop() {
+  const d = state.data, W = D.week;
+  if (!d.weeklyReady) {
+    return state.admin ? `<div class="callout"><span class="sub">Weekly prayer partners</span><span class="said">One setup step turns on each person’s family and brother to pray for each week. They’re in the README, steps 8 and 9.</span></div>` : "";
+  }
+  if (!W.fam || state.picking) return familyPicker();
+  if (joinsNextWeek(W.fam)) {
+    return `<div class="weekfam"><div class="sub">Welcome</div><p class="meta">Your family joins the weekly prayer circle on Sunday. From then on, your family and brother to pray for show up here.</p></div>`;
+  }
+  if (!W.partner) {
+    return `<div class="weekfam"><p class="meta">Once another family joins the prayer circle, you’ll get a family and a brother to pray for here each week.</p></div>`;
+  }
+  const extras = W.extraFams.map((x) => familyById(x.family_id)).map((f) => famBlock(f)).join("")
+    + W.extraMen.map((x) => brotherLine(memberById(x.for_member), "Brother")).join("");
+  return `<div class="weekfam">
+    <div class="sec-head"><h2>Your family to pray for</h2><span class="eyebrow">changes each Sunday</span></div>
+    ${famBlock(W.partner)}
+    ${W.brother ? brotherLine(W.brother, "Your brother")
+      : `<p class="meta">Nobody from the ${esc(W.partner.name)} family has signed in yet, so there’s no brother this week.</p>`}
+    ${extras ? `<div class="sub also">Also praying for</div>${extras}` : ""}
+  </div>`;
+}
+
 // Updates on prayers you prayed for, and who prayed for you.
 function myCard() {
   const me = myId();
-  const updates = state.data.requests.filter(isUpdated)
+  const d = state.data, W = D.week;
+  const updates = d.requests.filter(isUpdated)
     .sort((a, b) => String(latestUpdate(updatesFor(b)).created_at).localeCompare(String(latestUpdate(updatesFor(a)).created_at)));
-  const forMe = state.data.requests.filter((r) => r.for_member === me);
-  const prayedForMe = [...new Set(forMe.flatMap((r) => prayersThisWeek(prayersOf(r)).map((p) => p.member_id)))].filter((id) => id !== me);
-  let html = `<div class="mecard">`;
+  // Everyone who prayed for you, your requests or your family's this week.
+  const ids = new Set(d.requests.filter((r) => r.for_member === me).flatMap((r) => prayersThisWeek(prayersOf(r)).map((p) => p.member_id)));
+  if (d.weeklyReady) {
+    whoPrayedFor(me).forEach((id) => ids.add(id));
+    if (W.fam) d.requests.filter((r) => r.list === "lifegroup" && r.family_id === W.fam.id)
+      .forEach((r) => prayersThisWeek(prayersOf(r)).forEach((p) => ids.add(p.member_id)));
+  }
+  ids.delete(me);
+  const prayedForMe = [...ids];
+  let html = `<div class="mecard">` + weekTop();
   if (updates.length) {
     html += `<div class="my-updates"><div class="sub">\u{1F4E3} ${updates.length === 1 ? "An update" : `${updates.length} updates`} on prayers you prayed for</div>
       ${rows(updates.slice(0, 3), "card", { showWho: true, compact: true })}
       ${updates.length > 3 ? `<span class="meta">${updates.length - 3} more in the prayer lists below.</span>` : ""}</div>`;
   }
   html += `<div class="prayed-for-me">${prayedForMe.length
-    ? `\u{1F64F} ${esc(joinNames(prayedForMe.map(nameOf)))} prayed for you this week.`
-    : `<span class="meta">When someone prays for your requests this week, you’ll see it here.</span>`}</div>`;
+    ? `\u{1F64F} ${esc(joinNames(prayedForMe.map(nameOf)))} prayed for you${W.fam && d.weeklyReady ? " and your family" : ""} this week.`
+    : `<span class="meta">When someone prays for you or your requests this week, you’ll see it here.</span>`}</div>`;
   return html + whoAmI() + `</div>`;
 }
+
+// "Pray for another family (or brother) too", for this week only.
+function extraForm(kind) {
+  const W = D.week;
+  const taken = kind === "family"
+    ? new Set([W.fam?.id, W.partner?.id, ...W.extraFams.map((x) => x.family_id)])
+    : new Set([myId(), W.brother?.id, ...W.extraMen.map((x) => x.for_member)]);
+  const opts = kind === "family"
+    ? state.data.families.filter((f) => !taken.has(f.id)).sort((a, b) => normalize(a.name).localeCompare(normalize(b.name))).map((f) => [f.id, f.name])
+    : state.data.members.filter((m) => !taken.has(m.id)).map((m) => [m.id, m.display_name]);
+  if (!opts.length) return "";
+  const what = kind === "family" ? "family" : "brother";
+  return `<details class="more addextra"><summary>+ Pray for another ${what} too</summary>
+    <form class="form-plain" data-form="extra" data-kind="${kind}">
+      <label class="field">${kind === "family" ? "Family" : "Brother"}<select name="pick" required><option value="">Pick one…</option>${opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</select></label>
+      <p class="meta">Just for this week. Your list starts fresh on Sunday.</p>
+      <div class="actions"><button class="btn small" type="submit">Add for this week</button></div>
+    </form></details>`;
+}
+
+// Lifegroup tab: your family this week, at the top.
+function lgWeekCard() {
+  const W = D.week;
+  if (!state.data.weeklyReady || !W.partner) return "";
+  return `<div class="mecard">
+    <div class="sec-head"><h2>Your family this week</h2><span class="eyebrow">changes each Sunday</span></div>
+    ${famBlock(W.partner)}
+    ${W.extraFams.map((x) => { const f = familyById(x.family_id); return famBlock(f, removeBtn(x, f.name)); }).join("")}
+    ${extraForm("family")}
+  </div>`;
+}
+
+// Brothers tab: your brother this week, at the top.
+function broWeekCard() {
+  const W = D.week;
+  if (!state.data.weeklyReady || !W.partner) return "";
+  const b = W.brother;
+  let body;
+  if (!b) body = `<p class="meta">Nobody from the ${esc(W.partner.name)} family has signed in yet, so there’s no brother this week.</p>`;
+  else {
+    const open = state.data.requests.filter((r) => r.list === "brothers" && r.for_member === b.id && isActive(r)).sort(newestFirst);
+    const first = firstName(b.display_name);
+    body = `<div class="famblock"><div class="famblock-head"><button class="linkish fam-name" type="button" data-man="m:${esc(b.id)}">${esc(b.display_name)}</button><span class="actions">${personPrayBtn(b)}</span></div>
+      ${open.length ? rows(open, "bro", { compact: true }) : `<p class="meta">${esc(first)} hasn’t shared a prayer request yet. Pray for ${esc(first)} anyway, and ask how you can pray this week.</p>`}</div>`;
+  }
+  return `<div class="mecard">
+    <div class="sec-head"><h2>Your brother this week</h2><span class="eyebrow">changes each Sunday</span></div>
+    ${body}
+    ${W.extraMen.map((x) => { const m = memberById(x.for_member); return brotherLine(m, "Also praying for", removeBtn(x, m.display_name)); }).join("")}
+    ${extraForm("brother")}
+  </div>`;
+}
+
+// On a brother's page: who's praying for him this week, and the buttons.
+function personWeek(p) {
+  if (!state.data.weeklyReady || !p.id) return "";
+  const m = memberById(p.id);
+  if (!m) return "";
+  const self = m.id === myId();
+  const first = firstName(m.display_name);
+  const fam = m.family_id ? familyById(m.family_id) : null;
+  const onList = !self && onMyList(m.id);
+  const others = prayingFor(m).filter((x) => x.id !== myId() && x.id !== m.id).map((x) => x.display_name);
+  const lines = [];
+  if (fam) lines.push(`${self ? "Your" : esc(first) + "’s"} family: ${esc(fam.name)}`);
+  if (onList) lines.push(`You’re praying for ${esc(first)} this week.`);
+  if (others.length) lines.push(`${esc(joinNames(others))} ${others.length === 1 ? "is" : "are"} ${onList ? "too" : `praying for ${self ? "you" : esc(first)} this week`}.`);
+  const who = whoPrayedFor(m.id).map(nameOf);
+  lines.push(who.length ? `\u{1F64F} ${esc(joinNames(who))} prayed for ${self ? "you" : esc(first)} this week.` : `No one has prayed for ${self ? "you" : esc(first)} yet this week.`);
+  const add = self ? ""
+    : onList ? `<span class="meta">On your list this week ✓</span>`
+    : `<button class="btn quiet small" type="button" data-act="extra-add-man" data-id="${esc(m.id)}">Pray for ${esc(first)} this week too</button>`;
+  return `<div class="weekbox">${lines.map((l) => `<span class="meta">${l}</span>`).join("")}
+    ${self ? "" : `<div class="actions">${personPrayBtn(m)}${add}</div>`}</div>`;
+}
+
 
 // Every answered prayer, newest first, by month. This week's are in the news above.
 function rememberWall() {
@@ -439,7 +633,15 @@ const PRAY_NOW_SIZE = 3;
 function prayNowQueue(skip = []) {
   const wk = thisWeek(state.data.requests, labelOf);
   const extra = state.data.requests.filter((r) => isUpdated(r) && !wk.lifegroup.includes(r) && !wk.brothers.includes(r));
-  const rank = (r) => (isUpdated(r) ? 0 : !weekCount(r) ? 1 : 2);
+  // Like the app: news first, then your family and brother for the week,
+  // then the others you added, then anything nobody has prayed for yet.
+  const W = D.week;
+  const xf = new Set(W.extraFams.map((x) => x.family_id)), xm = new Set(W.extraMen.map((x) => x.for_member));
+  const rank = (r) => (isUpdated(r) ? 0
+    : W.partner && r.family_id === W.partner.id ? 1
+    : W.brother && r.for_member === W.brother.id ? 2
+    : xf.has(r.family_id) || xm.has(r.for_member) ? 3
+    : !weekCount(r) ? 4 : 5);
   return wk.lifegroup.concat(wk.brothers, extra)
     .filter((r) => !isMine(r) && !skip.includes(r.id))
     .sort((a, b) => rank(a) - rank(b))
@@ -613,6 +815,7 @@ function viewLifegroup() {
       </form>
     </details>
     <datalist id="familyNames">${state.data.families.map((f) => `<option value="${esc(f.name)}"></option>`).join("")}</datalist>
+    ${!searching && state.family === "all" ? lgWeekCard() : ""}
     <div class="sec">
       <div class="toolbar">
         <h2 class="sr">Families</h2>
@@ -636,7 +839,7 @@ const manKey = (r) => (r.for_member ? "m:" + r.for_member : "n:" + normalize(r.f
 // Everyone in the group, plus anyone a request was added for by name.
 function people() {
   const map = new Map();
-  for (const m of state.data.members) map.set("m:" + m.id, { key: "m:" + m.id, id: m.id, name: m.display_name });
+  for (const m of state.data.members) map.set("m:" + m.id, { key: "m:" + m.id, id: m.id, name: m.display_name, family_id: m.family_id || null });
   for (const r of state.data.requests) {
     if (r.list !== "brothers") continue;
     const k = manKey(r);
@@ -651,6 +854,7 @@ function personBody(p, rs) {
   const adding = state.form && state.form.kind === "add" && state.form.id === p.key;
   const self = p.id === myId();
   return `<div class="fam-body">
+    ${personWeek(p)}
     ${active.length ? rows(active, "brothers") : adding ? "" : `<p class="meta">${self ? "You haven’t shared a prayer request yet." : `No open prayer requests. Pray for ${esc(firstName(p.name))} anyway, and ask how you can pray.`}</p>`}
     ${adding ? `<form class="inline" data-form="add-person" data-key="${esc(p.key)}">
       <label class="field">Request for ${esc(p.name)}<textarea name="body" required maxlength="2000" placeholder="What should we pray for?"></textarea></label>
@@ -658,6 +862,20 @@ function personBody(p, rs) {
     </form>` : `<div class="actions"><button class="btn small" type="button" data-act="add-open" data-key="${esc(p.key)}">Add a request</button></div>`}
     ${answered.length ? `<div class="sub">Answered</div>${rows(answered, "brothers")}` : ""}
   </div>`;
+}
+
+// Under a brother's name: his family, who's praying for him, his requests.
+function personSub(p, rs) {
+  const parts = [];
+  if (state.data.weeklyReady && p.id) {
+    const fam = p.family_id ? familyById(p.family_id) : null;
+    if (fam) parts.push(fam.name + " family");
+    const others = prayingFor(p).filter((x) => x.id !== myId() && x.id !== p.id);
+    if (p.id !== myId() && onMyList(p.id)) parts.push("on your list this week ✓");
+    else if (others.length) parts.push(`${joinNames(others.map((x) => firstName(x.display_name)))} ${others.length === 1 ? "is" : "are"} praying this week`);
+  }
+  parts.push(countsLine(rs));
+  return parts.join(" · ");
 }
 
 function viewBrothers() {
@@ -683,10 +901,11 @@ function viewBrothers() {
       const rs = rsFor(p);
       const key = "brothers:" + p.key;
       const busy = (state.form && state.form.id === p.key) || rs.some((r) => r.id === state.confirm || (state.form && state.form.id === r.id && state.form.ctx === "brothers"));
-      const who = [...new Set(rs.flatMap((r) => prayersThisWeek(prayersOf(r)).map((x) => x.member_id)))];
+      const who = p.id && state.data.weeklyReady ? whoPrayedFor(p.id)
+        : [...new Set(rs.flatMap((r) => prayersThisWeek(prayersOf(r)).map((x) => x.member_id)))];
       return `<details class="person" data-group="${esc(key)}"${state.open.has(key) || busy ? " open" : ""}>
-        <summary><span class="fam-text"><span class="fam-name">${esc(p.name)}${p.id === myId() ? ` <span class="pill steel">You</span>` : ""}</span><span class="meta">${esc(countsLine(rs))}</span></span>
-          <span class="fam-side">${who.length ? `<span class="pray-count" title="People who prayed for his requests this week">\u{1F64F} ${who.length}</span>` : ""}${needs(p) ? `<span class="pill ember">Needs prayer</span>` : ""}</span></summary>
+        <summary><span class="fam-text"><span class="fam-name">${esc(p.name)}${p.id === myId() ? ` <span class="pill steel">You</span>` : ""}</span><span class="meta">${esc(personSub(p, rs))}</span></span>
+          <span class="fam-side">${who.length ? `<span class="pray-count" title="People who prayed for ${esc(firstName(p.name))} this week">\u{1F64F} ${who.length}</span>` : ""}${needs(p) ? `<span class="pill ember">Needs prayer</span>` : ""}</span></summary>
         ${personBody(p, rs)}
       </details>`;
     }).join("")}</div>`;
@@ -702,6 +921,7 @@ function viewBrothers() {
         <div class="actions"><button class="btn primary" type="submit">Add request</button></div>
       </form>
     </details>
+    ${!searching && state.man === "all" ? broWeekCard() : ""}
     <div class="sec">
       <div class="toolbar">
         <h2 class="sr">Brothers</h2>
@@ -941,6 +1161,29 @@ async function handleClick(b, id, what) {
       }
       break;
     }
+    case "change-family": state.picking = true; state.tab = "week"; render(); window.scrollTo(0, 0); app.querySelector('[data-form="my-family"] select')?.focus(); break;
+    case "pick-cancel": state.picking = false; render(); break;
+    case "pray-person": {
+      if (b.disabled) break;
+      b.disabled = true;
+      try {
+        const m = memberById(id);
+        if (!m) break;
+        const first = firstName(m.display_name);
+        if (iPrayedFor(id)) {
+          const undo = personUndoIds(id, myId(), state.data.personPrayers);
+          if (undo.length) await act(() => api.undoPersonPrayers(undo), `Removed your prayer for ${first} this week.`);
+          else toast(`You prayed for ${first}’s requests this week. To undo, tap Prayed this week on each one.`, 5000);
+        } else {
+          await act(() => api.prayForPerson(id), "\u{1F64F} " + nextVerse(), 5000);
+        }
+      } finally {
+        if (b.isConnected) b.disabled = false;
+      }
+      break;
+    }
+    case "extra-add-man": await act(() => api.addExtra({ week_of: weekOf(), for_member: id }), "Added to your list for this week."); break;
+    case "extra-remove": await act(() => api.removeExtra(id), "Taken off your list."); break;
     case "resend": b.disabled = true; await sendCode(state.sent); if (b.isConnected) b.disabled = false; break;
     case "other-email": state.sent = null; render(); break;
   }
@@ -988,6 +1231,11 @@ app.addEventListener("change", (e) => {
     const other = t.form.querySelector(".other-name");
     other.hidden = t.value !== "";
     other.querySelector("input").required = t.value === "";
+  }
+  if (t.matches('[data-form="my-family"] select[name="family"]')) {
+    const box = t.form.querySelector(".new-family");
+    box.hidden = t.value !== "new";
+    box.querySelector("input").required = t.value === "new";
   }
   if (t.matches('input[name="kind"]')) {
     const f = t.form;
@@ -1120,6 +1368,26 @@ app.addEventListener("submit", async (e) => {
         if (await act(() => api.addEvent(fields), "Event added.")) { state.eventDraft = null; render(); }
         break;
       }
+      case "my-family": {
+        const fresh = v.family === "new";
+        const name = fresh ? cleanFamilyName(v.name) : null;
+        if (!v.family || (fresh && !name)) { toast("Pick your family, or type its name."); break; }
+        const wife = String(v.wife || "").trim() || null;
+        const ok = await act(() => api.setMyFamily(fresh ? { name, wife } : { id: v.family, wife }));
+        if (ok) {
+          state.picking = false;
+          render();
+          const mine = D.week.fam;
+          toast(mine && joinsNextWeek(mine) ? "Saved. Your family joins the prayer circle on Sunday." : "Saved your family.");
+        }
+        break;
+      }
+      case "extra": {
+        if (!v.pick) { toast("Pick one first."); break; }
+        const fields = f.dataset.kind === "family" ? { week_of: weekOf(), family_id: v.pick } : { week_of: weekOf(), for_member: v.pick };
+        await act(() => api.addExtra(fields), "Added to your list for this week.");
+        break;
+      }
       case "invite": {
         if (!isEmail(v.email)) { toast("That email doesn't look right."); break; }
         await act(() => api.addInvite(v.email, v.name), "Added. They can sign in with that email now.");
@@ -1169,7 +1437,7 @@ if (!configured) {
     if (!session) {
       Object.assign(state, { member: null, data: null, admin: false, invites: [], tab: "week", form: null, confirm: null, prayNow: null, family: "all", man: "all",
         search: { lifegroup: "", brothers: "" }, famDate: {}, showAllAnswered: false, bulkNote: "",
-        when: "upcoming", openEvent: null, eventDraft: null });
+        when: "upcoming", openEvent: null, eventDraft: null, picking: false });
       state.open.clear(); state.picked.clear();
       document.body.classList.remove("noscroll");
       render();

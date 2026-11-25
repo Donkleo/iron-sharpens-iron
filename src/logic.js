@@ -358,3 +358,88 @@ export const mapsLink = (address) => "https://www.google.com/maps/search/?api=1&
 
 // Only send people to https pages.
 export const safeUrl = (u) => (/^https:\/\//i.test(String(u || "")) ? String(u) : "");
+
+// ---------- your family and brother each week ----------
+
+// How families are ordered in the prayer circle, the same as the app:
+// "The Smiths" and "smiths" sort alike.
+export const familyKey = (name) => normalize(cleanFamilyName(name)).replace(/^the /, "");
+export const familyLabel = (f) => (f ? [f.husband, f.wife].filter(Boolean).join(" & ") : "");
+
+// The app counted weeks from this Sunday, so the pairs match it.
+const CIRCLE_EPOCH = new Date(2026, 0, 4);
+export const weekOf = (now = new Date()) => ymd(prayerWeekStart(now));
+
+// Every family is in the circle, like the app. A family added mid-week (its
+// "since" day is after this Sunday) joins next Sunday, so nobody's pairs
+// change mid-week.
+export const inCircle = (f, now = new Date()) => !!(f && f.name) && (!f.since || String(f.since) <= weekOf(now));
+export const joinsNextWeek = (f, now = new Date()) => !!(f && f.name) && !inCircle(f, now);
+
+// Each week every family prays for the one N places ahead in the circle, so
+// each family prays for exactly one and is prayed for by exactly one, and the
+// pairs move every Sunday. A family whose "Pray for" on the sheet names
+// another family always gets that one, as in the app.
+export function partnerFamily(families, familyId, now = new Date()) {
+  const fams = families.filter((f) => inCircle(f, now))
+    .sort((a, b) => familyKey(a.name).localeCompare(familyKey(b.name)) || String(a.id).localeCompare(String(b.id)));
+  const i = fams.findIndex((f) => f.id === familyId);
+  if (i < 0) return null;
+  const named = fams[i].pray_for && families.find((f) => familyKey(f.name) === familyKey(fams[i].pray_for));
+  if (named && named.id !== familyId) return named;
+  if (fams.length < 2) return null;
+  const n = fams.length;
+  const week = Math.round((prayerWeekStart(now) - CIRCLE_EPOCH) / (7 * DAY));
+  const offset = 1 + (((week % (n - 1)) + (n - 1)) % (n - 1));
+  return fams[(i + offset) % n];
+}
+
+// For each family, the families praying for it this week. Usually one; a
+// sheet "Pray for" can add a second.
+export function prayingFamilies(families, now = new Date()) {
+  const m = new Map();
+  for (const f of families) {
+    const p = partnerFamily(families, f.id, now);
+    if (!p) continue;
+    if (!m.has(p.id)) m.set(p.id, []);
+    m.get(p.id).push(f);
+  }
+  return m;
+}
+
+// The brother in a family: the first one A to Z if there are two.
+export function memberOfFamily(members, familyId) {
+  if (!familyId) return null;
+  return members.filter((m) => m.family_id === familyId)
+    .sort((a, b) => normalize(a.display_name).localeCompare(normalize(b.display_name)))[0] || null;
+}
+
+// A family's prayers worth showing this week: its current sheet's open
+// prayers, or its older open ones when it has none on this week's sheet.
+export function familyPrayers(requests, familyId, latest) {
+  const open = requests.filter((r) => r.list === "lifegroup" && isActive(r) && r.family_id === familyId);
+  const current = open.filter((r) => isCurrent(r, latest));
+  return (current.length ? current : open).sort((a, b) => entryDay(b).localeCompare(entryDay(a)));
+}
+
+// Who prayed for a person this week: "I prayed for him", or any of his requests.
+export function prayersForPerson(memberId, personPrayers, requests, by, now = new Date()) {
+  const ids = new Set(personPrayers.filter((p) => p.member_id === memberId && inThisWeek(p.prayed_at, now)).map((p) => p.prayed_by));
+  for (const r of requests) {
+    if (r.list === "brothers" && r.for_member === memberId) prayersThisWeek(by.get(r.id), now).forEach((p) => ids.add(p.member_id));
+  }
+  return [...ids];
+}
+export const prayedForPerson = (memberId, uid, personPrayers, requests, by, now = new Date()) =>
+  !!uid && prayersForPerson(memberId, personPrayers, requests, by, now).includes(uid);
+
+// The "I prayed for him" marks to take back: only this week's, only mine.
+export const personUndoIds = (memberId, uid, personPrayers, now = new Date()) =>
+  personPrayers.filter((p) => p.member_id === memberId && p.prayed_by === uid && inThisWeek(p.prayed_at, now)).map((p) => p.id);
+
+// Extra families and brothers I added for this week only.
+export function myExtras(extras, uid, now = new Date()) {
+  const wk = weekOf(now);
+  const mine = extras.filter((x) => x.member_id === uid && x.week_of === wk);
+  return { families: mine.filter((x) => x.family_id), members: mine.filter((x) => x.for_member) };
+}

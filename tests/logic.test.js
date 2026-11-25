@@ -3,6 +3,8 @@ import {
   prayerWeekStart, inThisWeek, weekFrom, thisWeek, latestByFamily, isCurrent, needsPrayer,
   prayersByRequest, iPrayedThisWeek, groupBy, matchesSearch, cleanFamilyName, esc, isEmail, ago,
   upcomingEvents, eventsFor, dateRange, eventEnd, calendarLink, mapsLink, safeUrl, dateBlock,
+  partnerFamily, prayingFamilies, joinsNextWeek, memberOfFamily, familyLabel, prayersForPerson, personUndoIds,
+  myExtras, weekOf,
 } from "../src/logic.js";
 
 // Wednesday Nov 25, 2026, noon local time.
@@ -241,5 +243,83 @@ describe("calendar", () => {
     expect(safeUrl("http://example.org")).toBe("");
     expect(safeUrl("https://example.org")).toBe("https://example.org");
     expect(mapsLink("12 Oak St & 2nd")).toContain("12%20Oak%20St%20%26%202nd");
+  });
+});
+
+describe("weekly prayer circle", () => {
+  const fam = (id, name, o = {}) => ({ id, name, since: null, pray_for: null, ...o });
+  const five = ["Adams", "Baker", "Clark", "Davis", "Evans"].map((n, i) => fam("f" + i, n));
+  const pairs = (fams, at) => fams.map((f) => partnerFamily(fams, f.id, at)?.id);
+
+  it("gives every family exactly one family, and every family exactly one praying for it", () => {
+    for (let w = 0; w < 6; w++) {
+      const at = new Date(2026, 10, 25 + 7 * w, 12);
+      const p = pairs(five, at);
+      expect(new Set(p).size).toBe(5);
+      five.forEach((f, i) => expect(p[i]).not.toBe(f.id));
+      const praying = prayingFamilies(five, at);
+      five.forEach((f) => expect(praying.get(partnerFamily(five, f.id, at).id).map((x) => x.id)).toEqual([f.id]));
+    }
+  });
+
+  it("changes the pairs each Sunday, and keeps them all week", () => {
+    expect(pairs(five, new Date(2026, 10, 22, 8))).toEqual(pairs(five, new Date(2026, 10, 28, 20)));
+    expect(pairs(five, new Date(2026, 10, 29, 8))).not.toEqual(pairs(five, new Date(2026, 10, 28, 20)));
+  });
+
+  it("matches the app's order, ignoring 'The' and case", () => {
+    const fams = [fam("a", "the Bakers"), fam("b", "adams"), fam("c", "Clark")];
+    // Week of Nov 22, 2026 is 46 weeks after the app's first Sunday: offset 1.
+    expect(partnerFamily(fams, "b", now).id).toBe("a");
+    expect(partnerFamily(fams, "a", now).id).toBe("c");
+  });
+
+  it("lets a family added mid-week join next Sunday", () => {
+    const late = [...five, fam("new", "Aaron", { since: "2026-11-25" })];
+    expect(pairs(late, now).slice(0, 5)).toEqual(pairs(five, now));
+    expect(partnerFamily(late, "new", now)).toBeNull();
+    expect(joinsNextWeek(late[5], now)).toBe(true);
+    expect(partnerFamily(late, "new", new Date(2026, 10, 29, 12))).not.toBeNull();
+  });
+
+  it("follows the sheet's Pray for, and has no partner with one family", () => {
+    const fams = [fam("a", "Adams", { pray_for: "The Clarks" }), fam("b", "Baker"), fam("c", "Clarks")];
+    expect(partnerFamily(fams, "a", now).id).toBe("c");
+    // Two families can then pray for the same one; both are listed.
+    const both = prayingFamilies(fams, now).get("c").map((x) => x.id).sort();
+    expect(both.includes("a")).toBe(true);
+    expect(partnerFamily([fam("a", "Adams")], "a", now)).toBeNull();
+  });
+
+  it("finds the brother in a family, and the couple's names", () => {
+    const members = [{ id: "2", display_name: "Zed", family_id: "a" }, { id: "1", display_name: "Bob", family_id: "a" }];
+    expect(memberOfFamily(members, "a").id).toBe("1");
+    expect(memberOfFamily(members, "b")).toBeNull();
+    expect(familyLabel({ husband: "Mike", wife: "Ann" })).toBe("Mike & Ann");
+    expect(familyLabel({ husband: "Mike", wife: null })).toBe("Mike");
+  });
+
+  it("counts prayers for a man and for his requests this week, and undoes only mine", () => {
+    const pp = [
+      { id: "x", member_id: "m", prayed_by: "me", prayed_at: new Date(2026, 10, 23).toISOString() },
+      { id: "old", member_id: "m", prayed_by: "me", prayed_at: new Date(2026, 10, 20).toISOString() },
+      { id: "y", member_id: "m", prayed_by: "you", prayed_at: new Date(2026, 10, 24).toISOString() },
+    ];
+    const requests = [req({ id: "r", list: "brothers", for_member: "m" })];
+    const by = prayersByRequest([{ id: "p", request_id: "r", member_id: "pal", prayed_at: new Date(2026, 10, 24).toISOString() }]);
+    expect(prayersForPerson("m", pp, requests, by, now).sort()).toEqual(["me", "pal", "you"]);
+    expect(personUndoIds("m", "me", pp, now)).toEqual(["x"]);
+  });
+
+  it("keeps only this week's extras", () => {
+    const extras = [
+      { id: "1", member_id: "me", week_of: weekOf(now), family_id: "a", for_member: null },
+      { id: "2", member_id: "me", week_of: weekOf(now), family_id: null, for_member: "m" },
+      { id: "3", member_id: "me", week_of: "2026-11-15", family_id: "b", for_member: null },
+    ];
+    const x = myExtras(extras, "me", now);
+    expect(x.families.map((e) => e.id)).toEqual(["1"]);
+    expect(x.members.map((e) => e.id)).toEqual(["2"]);
+    expect(weekOf(now)).toBe("2026-11-22");
   });
 });
