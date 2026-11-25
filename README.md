@@ -59,6 +59,19 @@ deploys to GitHub Pages.
    - In **Message body**, select everything that is there, delete it, paste
      the contents you copied, and press **Save**.
 
+6. **Calendar:** copy the whole text of the calendar file and run it, the
+   same way as step 1.
+   - Open the file as plain text:
+     https://raw.githubusercontent.com/Donkleo/iron-sharpens-iron/main/supabase/migrations/20261125000000_calendar.sql
+   - Select all of the text and copy it. Paste the text itself, not the
+     file's name.
+   - In **SQL Editor**, start a new query, paste, and press **Run**. It should
+     say "Success. No rows returned".
+
+   Until this runs, the Calendar tab says it's almost ready, and prayers work
+   as before. Sheet and church events arrive once the syncs are pointed at
+   the site; see `docs/calendar-sync.md`.
+
 The repo's Actions secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY` are read at
 deploy time. Without them the site builds and shows a setup notice.
 

@@ -20,6 +20,13 @@ const data = {
   ],
   updates: [],
   prayers: [],
+  calendarReady: true,
+  events: [
+    { id: "e1", title: "Saturday breakfast", starts_on: ymd(new Date(Date.now() + 2 * 86400000)), time_text: "7:00 AM", location: "Diner", source: "group", hidden: false, created_by: me },
+    { id: "e2", title: "Bible study <i>night</i>", starts_on: ymd(new Date(Date.now() + 3 * 86400000)), address: "12 Oak St", source: "sheet", hidden: false, created_by: null },
+    { id: "e3", title: "Christmas Eve service", starts_on: ymd(new Date(Date.now() + 40 * 86400000)), url: "javascript:alert(1)", source: "church", hidden: false, created_by: null },
+    { id: "e4", title: "Old church event", starts_on: ymd(new Date(Date.now() + 5 * 86400000)), source: "church", hidden: true, created_by: null },
+  ],
 };
 
 let authCallback;
@@ -52,6 +59,9 @@ Object.assign(api, {
   deleteRequest: vi.fn(async () => {}),
   addInvite: vi.fn(async () => {}),
   removeInvite: vi.fn(async () => {}),
+  addEvent: vi.fn(async () => {}),
+  deleteEvent: vi.fn(async () => {}),
+  setEventHidden: vi.fn(async () => {}),
 });
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -246,5 +256,112 @@ describe("signed in", () => {
     submit(form);
     await settle();
     expect(api.addRequest).toHaveBeenCalledWith({ list: "brothers", for_name: "Alex", body: "Travel" });
+  });
+});
+
+describe("calendar", () => {
+  it("shows Coming up on This week, without hidden or far-off events", () => {
+    click('[data-tab="week"]');
+    const text = app().textContent;
+    expect(text).toContain("Coming up");
+    expect(text).toContain("Saturday breakfast");
+    expect(text).toContain("Bible study <i>night</i>");
+    expect(text).not.toContain("Christmas Eve service");
+    expect(text).not.toContain("Old church event");
+  });
+
+  it("has a Calendar tab in place of Invites, like the app", () => {
+    const tabs = [...app().querySelectorAll(".tab")].map((t) => t.dataset.tab);
+    expect(tabs).toEqual(["week", "lifegroup", "brothers", "calendar"]);
+    expect(app().querySelector('[data-tab="calendar"]').textContent.trim()).toBe("Calendar");
+    click('[data-tab="calendar"]');
+    expect(app().querySelector("#panel-calendar").textContent).toContain("Christmas Eve service");
+    expect(app().querySelector('[data-when="hidden"]')).toBeNull();
+    expect(app().textContent).not.toContain("Old church event");
+  });
+
+  it("never links to a non-https page", () => {
+    expect(app().querySelector('a[href^="javascript"]')).toBeNull();
+  });
+
+  it("opens a sheet event's details with the address and Maps", () => {
+    click('[data-act="ev-details"][data-id="e2"]');
+    const d = app().querySelector(".ev-details");
+    expect(d.textContent).toContain("12 Oak St");
+    expect(d.querySelector('a[href^="https://www.google.com/maps/"]')).not.toBeNull();
+  });
+
+  it("only shows Hide on church events to admins", () => {
+    expect(app().querySelector('[data-act="confirm"][data-id="ev:e3"]')).toBeNull();
+  });
+
+  it("adds a group event, and keeps what was typed if saving fails", async () => {
+    api.addEvent.mockRejectedValueOnce(new Error("Couldn't reach it"));
+    let form = app().querySelector('form[data-form="event"]');
+    form.closest("details").open = true;
+    form.querySelector('[name="title"]').value = "Workday at Mike's";
+    form.querySelector('[name="starts_on"]').value = "2026-12-12";
+    form.querySelector('[name="time_text"]').value = "8:00 AM";
+    submit(form);
+    await settle();
+    form = app().querySelector('form[data-form="event"]');
+    expect(form.closest("details").open).toBe(true);
+    expect(form.querySelector('[name="title"]').value).toBe("Workday at Mike's");
+    submit(form);
+    await settle();
+    expect(api.addEvent).toHaveBeenLastCalledWith({ title: "Workday at Mike's", starts_on: "2026-12-12", time_text: "8:00 AM", location: null });
+    expect(toast()).toBe("Event added.");
+    expect(app().querySelector('form[data-form="event"] [name="title"]').value).toBe("");
+  });
+
+  it("deletes your own group event after asking", async () => {
+    click('[data-act="confirm"][data-id="ev:e1"]');
+    expect(app().textContent).toContain("Delete this event for everyone?");
+    click('[data-act="ev-del"][data-id="e1"]');
+    await settle();
+    expect(api.deleteEvent).toHaveBeenCalledWith("e1");
+  });
+
+  it("shows past events", () => {
+    click('[data-act="when"][data-when="past"]');
+    expect(app().textContent).toContain("No past events.");
+  });
+});
+
+describe("calendar for an admin", () => {
+  beforeAll(async () => {
+    api.amIAdmin.mockResolvedValue(true);
+    authCallback("SIGNED_OUT", null);
+    authCallback("SIGNED_IN", { user: { id: me, email: "leo@example.com" } });
+    await settle();
+  });
+
+  it("opens the invite list from the footer", () => {
+    click('[data-tab="calendar"]');
+    click('.foot [data-act="tab"][data-tab="group"]');
+    expect(app().textContent).toContain("Invite someone");
+    expect(app().querySelector('.tab[aria-selected="true"]')).toBeNull();
+  });
+
+  it("hides a church event and brings a hidden one back", async () => {
+    click('[data-tab="calendar"]');
+    click('[data-act="confirm"][data-id="ev:e3"]');
+    click('[data-act="ev-hide"][data-id="e3"]');
+    await settle();
+    expect(api.setEventHidden).toHaveBeenCalledWith("e3", true);
+    click('[data-act="when"][data-when="hidden"]');
+    expect(app().textContent).toContain("Old church event");
+    click('[data-act="ev-unhide"][data-id="e4"]');
+    await settle();
+    expect(api.setEventHidden).toHaveBeenCalledWith("e4", false);
+  });
+
+  it("says when the calendar's setup step hasn't run", async () => {
+    api.loadAll.mockResolvedValueOnce({ ...structuredClone(data), events: [], calendarReady: false });
+    click('[data-act="ev-unhide"][data-id="e4"]');
+    await settle();
+    expect(app().textContent).toContain("The calendar is almost ready");
+    click('[data-tab="week"]');
+    expect(app().textContent).not.toContain("Coming up");
   });
 });

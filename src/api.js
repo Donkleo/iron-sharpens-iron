@@ -19,14 +19,26 @@ async function all(table, columns, orderBy, ascending = false) {
 }
 
 export async function loadAll() {
-  const [members, families, requests, updates, prayers] = await Promise.all([
+  const [members, families, requests, updates, prayers, events] = await Promise.all([
     all("members", "id, display_name", "display_name", true),
     all("families", "id, name", "name", true),
     all("requests", "*", "created_at"),
     all("request_updates", "*", "created_at"),
     all("prayers", "*", "prayed_at"),
+    loadEvents(),
   ]);
-  return { members, families, requests, updates, prayers };
+  return { members, families, requests, updates, prayers, events: events || [], calendarReady: events !== null };
+}
+
+// The calendar's table comes from its own setup step. Until that has run,
+// the prayers still load and the calendar says it isn't set up (null).
+async function loadEvents() {
+  try {
+    return await all("events", "*", "starts_on", true);
+  } catch (e) {
+    if (e && (e.code === "PGRST205" || e.code === "42P01" || /could not find the table|does not exist/i.test(e.message || ""))) return null;
+    throw e;
+  }
 }
 
 export async function amIAdmin() {
@@ -90,4 +102,21 @@ export async function markPrayed(requestId) {
 
 export async function undoPrayed(prayerIds) {
   check(await supabase.from("prayers").delete().in("id", prayerIds));
+}
+
+// ----- calendar -----
+
+export async function addEvent(fields) {
+  check(await supabase.from("events").insert(fields));
+}
+
+export async function deleteEvent(id) {
+  const rows = check(await supabase.from("events").delete().eq("id", id).select("id"));
+  if (!rows.length) throw new Error("Only the person who added this event, or an admin, can delete it.");
+}
+
+// Admins hide a sheet or church event (or bring it back).
+export async function setEventHidden(id, hidden) {
+  const rows = check(await supabase.from("events").update({ hidden }).eq("id", id).select("id"));
+  if (!rows.length) throw new Error("Only an admin can hide church and sheet events.");
 }
