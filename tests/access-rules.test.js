@@ -313,7 +313,7 @@ describe("calendar", () => {
       { id: "c1", title: "Thanksgiving service", date: "2026-11-26", time: "6:00 PM", url: "https://example.org/thanks" },
       { id: "c2", title: "Men's retreat", date: "2026-12-04", end_date: "2026-12-06" },
     ];
-    const r = await as("anon", "select public.sync_events($1, 'church', $2::jsonb) as n", [KEY, JSON.stringify(events)]);
+    const r = await as("anon", "select public.sync_events(p_key => $1, p_source => 'church', p_events => $2::jsonb) as n", [KEY, JSON.stringify(events)]);
     expect(r.rows[0].n).toBe(2);
     const rows = (await as("brother", "select id, external_id, title, ends_on::text, time_text, url, created_by from public.events where source = 'church' order by external_id")).rows;
     expect(rows.map((x) => x.title)).toEqual(["Thanksgiving service", "Men's retreat"]);
@@ -322,18 +322,18 @@ describe("calendar", () => {
     churchEvent = rows[0].id;
     // Running again updates in place.
     events[0].title = "Thanksgiving Eve service";
-    await as("anon", "select public.sync_events($1, 'church', $2::jsonb)", [KEY, JSON.stringify(events)]);
+    await as("anon", "select public.sync_events(p_key => $1, p_source => 'church', p_events => $2::jsonb)", [KEY, JSON.stringify(events)]);
     const again = await db.query("select count(*)::int as n, min(title) as t from public.events where source = 'church' and external_id = 'c1'");
     expect(again.rows[0]).toEqual({ n: 1, t: "Thanksgiving Eve service" });
   });
 
   it("refuses a wrong or missing sync key, and group events", async () => {
-    await expect(as("anon", "select public.sync_events('wrong-key-wrong-key-wrong-key', 'church', '[]'::jsonb)")).rejects.toThrow(/Unknown sync key/);
-    await expect(as("anon", "select public.sync_events(null, 'church', '[]'::jsonb)")).rejects.toThrow(/Unknown sync key/);
-    await expect(as("anon", "select public.sync_events($1, 'group', '[]'::jsonb)", [KEY])).rejects.toThrow(/sheet or church/);
-    await expect(as("anon", "select public.sync_events($1, 'sheet', '[{\"title\":\"no id\",\"date\":\"2026-11-30\"}]'::jsonb)", [KEY]))
+    await expect(as("anon", "select public.sync_events(p_key => 'wrong-key-wrong-key-wrong-key', p_source => 'church', p_events => '[]'::jsonb)")).rejects.toThrow(/Unknown sync key/);
+    await expect(as("anon", "select public.sync_events(p_key => null, p_source => 'church', p_events => '[]'::jsonb)")).rejects.toThrow(/Unknown sync key/);
+    await expect(as("anon", "select public.sync_events(p_key => $1, p_source => 'group', p_events => '[]'::jsonb)", [KEY])).rejects.toThrow(/sheet or church/);
+    await expect(as("anon", "select public.sync_events(p_key => $1, p_source => 'sheet', p_events => '[{\"title\":\"no id\",\"date\":\"2026-11-30\"}]'::jsonb)", [KEY]))
       .rejects.toThrow(/needs an id, a title and a date/);
-    await expect(as("anon", "select public.sync_events($1, 'sheet', '[{\"id\":\"s9\",\"title\":\"no date\"}]'::jsonb)", [KEY]))
+    await expect(as("anon", "select public.sync_events(p_key => $1, p_source => 'sheet', p_events => '[{\"id\":\"s9\",\"title\":\"no date\"}]'::jsonb)", [KEY]))
       .rejects.toThrow(/needs an id, a title and a date/);
   });
 
@@ -348,7 +348,7 @@ describe("calendar", () => {
     expect((await db.query("select hidden from public.events where id = $1", [churchEvent])).rows[0].hidden).toBe(false);
     await expect(as("brother", "update public.events set title = 'x' where id = $1", [churchEvent])).rejects.toThrow(/permission denied/);
     await as("admin", "update public.events set hidden = true where id = $1", [churchEvent]);
-    await as("anon", "select public.sync_events($1, 'church', $2::jsonb)", [KEY, JSON.stringify([{ id: "c1", title: "Thanksgiving Eve service", date: "2026-11-26" }])]);
+    await as("anon", "select public.sync_events(p_key => $1, p_source => 'church', p_events => $2::jsonb)", [KEY, JSON.stringify([{ id: "c1", title: "Thanksgiving Eve service", date: "2026-11-26" }])]);
     expect((await db.query("select hidden from public.events where id = $1", [churchEvent])).rows[0].hidden).toBe(true);
     // Group events aren't hidden, they're deleted.
     await as("admin", "update public.events set hidden = true where id = $1", [groupEvent]);
@@ -357,8 +357,8 @@ describe("calendar", () => {
 
   it("a sync with a start day removes that source's nights no longer listed", async () => {
     const sheet = [{ id: "s1", title: "Bible study", date: "2026-11-30", address: "12 Oak St" }, { id: "s2", title: "Hangout", date: "2026-12-07", kind: "open" }];
-    await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01')", [KEY, JSON.stringify(sheet)]);
-    await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01')", [KEY, JSON.stringify(sheet.slice(0, 1))]);
+    await as("anon", "select public.sync_events(p_key => $1, p_source => 'sheet', p_events => $2::jsonb, p_replace_from => '2026-11-01')", [KEY, JSON.stringify(sheet)]);
+    await as("anon", "select public.sync_events(p_key => $1, p_source => 'sheet', p_events => $2::jsonb, p_replace_from => '2026-11-01')", [KEY, JSON.stringify(sheet.slice(0, 1))]);
     const r = await db.query("select external_id from public.events where source = 'sheet'");
     expect(r.rows).toEqual([{ external_id: "s1" }]);
     // Church events were left alone.
@@ -370,11 +370,11 @@ describe("calendar", () => {
       { id: "s1", title: "Bible study", date: "2026-11-30", url: "http://example.org/old" },
       { id: "s1", title: "Bible study at the Hills", date: "2026-11-30", url: "HTTPS://example.org/a" },
     ];
-    const r = await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01') as n", [KEY, JSON.stringify(sheet)]);
+    const r = await as("anon", "select public.sync_events(p_key => $1, p_source => 'sheet', p_events => $2::jsonb, p_replace_from => '2026-11-01') as n", [KEY, JSON.stringify(sheet)]);
     expect(r.rows[0].n).toBe(1);
     const row = (await db.query("select title, url from public.events where source = 'sheet'")).rows;
     expect(row).toEqual([{ title: "Bible study at the Hills", url: "https://example.org/a" }]);
-    await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01')", [KEY, JSON.stringify(sheet.slice(0, 1))]);
+    await as("anon", "select public.sync_events(p_key => $1, p_source => 'sheet', p_events => $2::jsonb, p_replace_from => '2026-11-01')", [KEY, JSON.stringify(sheet.slice(0, 1))]);
     expect((await db.query("select url from public.events where source = 'sheet'")).rows[0].url).toBeNull();
   });
 
@@ -399,10 +399,99 @@ describe("calendar", () => {
   });
 });
 
+describe("calendar sync key in a header", () => {
+  const KEY = "header-sync-key-0123456789abcdef";
+  const ev = JSON.stringify([{ id: "h1", title: "Header test", date: "2027-01-05" }]);
+  const withHeaders = async (headers, sql, params = []) => {
+    await db.query("select set_config('request.headers', $1, false)", [headers]);
+    try { return await as("anon", sql, params); } finally { await db.query("select set_config('request.headers', '', false)"); }
+  };
+
+  beforeAll(async () => {
+    await db.query("insert into private.sync_keys (key_hash, label) values (private.hash_key($1), 'header test')", [KEY]);
+  });
+
+  it("takes the key from the x-sync-key header", async () => {
+    const r = await withHeaders(JSON.stringify({ "x-sync-key": KEY }), "select public.sync_events(p_source => 'church', p_events => $1::jsonb) as n", [ev]);
+    expect(r.rows[0].n).toBe(1);
+  });
+
+  it("refuses a wrong, empty, short or garbled header, or none", async () => {
+    const call = "select public.sync_events(p_source => 'church', p_events => $1::jsonb)";
+    for (const h of [JSON.stringify({ "x-sync-key": "wrong-key-wrong-key-wrong-key-wrong" }), JSON.stringify({ "x-sync-key": "" }),
+      JSON.stringify({ "x-sync-key": KEY.slice(0, 10) }), JSON.stringify({ "x-other": KEY }), "not json", ""]) {
+      await expect(withHeaders(h, call, [ev])).rejects.toThrow(/Unknown sync key/);
+    }
+  });
+
+  it("a wrong key in the body isn't rescued by a right header", async () => {
+    await expect(withHeaders(JSON.stringify({ "x-sync-key": KEY }),
+      "select public.sync_events(p_key => 'wrong-key-wrong-key-wrong-key-wrong', p_source => 'church', p_events => $1::jsonb)", [ev]))
+      .rejects.toThrow(/Unknown sync key/);
+  });
+
+  it("the key and its helpers stay out of reach", async () => {
+    await expect(as("anon", "select private.header_sync_key()")).rejects.toThrow(/permission denied/);
+    await expect(as("anon", "select private.hash_key('x')")).rejects.toThrow(/permission denied/);
+    await expect(as("brother", "select private.header_sync_key()")).rejects.toThrow(/permission denied/);
+    await expect(as("anon", "select * from private.sync_keys")).rejects.toThrow(/permission denied/);
+    const rls = await db.query("select relrowsecurity from pg_class where oid = 'private.sync_keys'::regclass");
+    expect(rls.rows[0].relrowsecurity).toBe(true);
+    // The old four-argument version (key first) is gone.
+    const old = await db.query("select count(*)::int as n from pg_proc where proname = 'sync_events'");
+    expect(old.rows[0].n).toBe(1);
+  });
+
+  it("odd values are cleaned up instead of stopping the sync", async () => {
+    const items = [
+      { id: "h2", title: "Bible study at the Hills'", date: "2027-01-07", kind: "bible-study", end_date: "2027-01-01", time: "6:30pm" },
+      { id: "h3", title: "x".repeat(300), date: "2027-01-08", kind: "open", url: "https://example.org/" + "a".repeat(600), location: "y".repeat(250) },
+    ];
+    await withHeaders(JSON.stringify({ "x-sync-key": KEY }), "select public.sync_events(p_source => 'sheet', p_events => $1::jsonb)", [JSON.stringify(items)]);
+    const rows = (await db.query("select external_id, kind, ends_on, time_text, length(title) as t, length(location) as l, url from public.events where external_id in ('h2', 'h3') order by external_id")).rows;
+    expect(rows).toEqual([
+      { external_id: "h2", kind: null, ends_on: null, time_text: "6:30pm", t: 25, l: null, url: null },
+      { external_id: "h3", kind: "open", ends_on: null, time_text: null, t: 200, l: 200, url: null },
+    ]);
+  });
+});
+
 describe("every table", () => {
   it("has row-level security turned on", async () => {
     const r = await db.query(`select relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity`);
     expect(r.rows).toEqual([]);
+  });
+});
+
+// In Supabase the tables and the sync function belong to the "postgres" role,
+// which is not a superuser. Check the sync still works that way, now that
+// row-level security is on for the key table.
+describe("as Supabase sets it up (not a superuser)", () => {
+  it("the sync function still reads the key table and writes events", async () => {
+    await db.exec(`
+      create role owner_like_postgres nologin;
+      grant usage on schema private to owner_like_postgres;
+      alter schema private owner to owner_like_postgres;
+      alter table private.sync_keys owner to owner_like_postgres;
+      alter table public.events owner to owner_like_postgres;
+      alter function private.hash_key(text) owner to owner_like_postgres;
+      alter function private.header_sync_key() owner to owner_like_postgres;
+      alter function public.sync_events(text, jsonb, date, text) owner to owner_like_postgres;
+      grant usage on schema public to owner_like_postgres;
+      grant select on public.members to owner_like_postgres;
+    `);
+    const KEY = "owner-test-key-0123456789abcdef";
+    await db.query("insert into private.sync_keys (key_hash) values (private.hash_key($1))", [KEY]);
+    await db.query("select set_config('request.headers', $1, false)", [JSON.stringify({ "x-sync-key": KEY })]);
+    try {
+      const r = await as("anon", "select public.sync_events(p_source => 'church', p_events => $1::jsonb) as n",
+        [JSON.stringify([{ id: "o1", title: "Owner test", date: "2027-02-01" }])]);
+      expect(r.rows[0].n).toBe(1);
+      await expect(as("anon", "select public.sync_events(p_key => 'wrong-key-wrong-key-wrong-key-wrong', p_source => 'church', p_events => '[]'::jsonb)"))
+        .rejects.toThrow(/Unknown sync key/);
+    } finally {
+      await db.query("select set_config('request.headers', '', false)");
+    }
   });
 });

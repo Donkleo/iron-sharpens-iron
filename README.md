@@ -68,9 +68,20 @@ deploys to GitHub Pages.
    - In **SQL Editor**, start a new query, paste, and press **Run**. It should
      say "Success. No rows returned".
 
+   If Supabase warns that `private.sync_keys` has no row-level security,
+   press **Run and enable RLS**; step 7 turns it on anyway.
+
    Until this runs, the Calendar tab says it's almost ready, and prayers work
-   as before. Sheet and church events arrive once the syncs are pointed at
-   the site; see `docs/calendar-sync.md`.
+   as before.
+7. **Calendar sync key:** run the next file the same way as step 1.
+   - Open the file as plain text:
+     https://raw.githubusercontent.com/Donkleo/iron-sharpens-iron/main/supabase/migrations/20261125140000_sync_key_header.sql
+   - Select all of the text and copy it, then paste it into a new
+     **SQL Editor** query and press **Run**. It should say "Success. No rows
+     returned".
+
+   Sheet and church events arrive once the syncs are pointed at the site.
+   `docs/calendar-sync.md` has the steps.
 
 The repo's Actions secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY` are read at
 deploy time. Without them the site builds and shows a setup notice.
