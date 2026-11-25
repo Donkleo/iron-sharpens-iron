@@ -493,9 +493,16 @@ describe("weekly partners", () => {
     expect(f.name).toBe("Weekly B");
     expect(f.husband).toBe("Admin");
     expect(f.since).not.toBeNull();
-    // The same name again finds it instead of adding a second one.
+    // The same name again, or with "The", finds it instead of adding a second one.
     expect((await as("brother", "select public.set_my_family(null, 'weekly b', null) as id")).rows[0].id).toBe(r.rows[0].id);
+    expect((await as("brother", "select public.set_my_family(null, 'The Weekly B', null) as id")).rows[0].id).toBe(r.rows[0].id);
+    expect((await db.query("select count(*)::int as n from public.families where name ilike '%weekly b%'")).rows[0].n).toBe(1);
     await as("brother", "select public.set_my_family($1, null, null)", [famA]);
+  });
+
+  it("only fills in a wife's name the family doesn't have, so nobody can change it", async () => {
+    await as("admin", "select public.set_my_family($1, null, 'Zoe')", [famA]);
+    expect((await db.query("select wife from public.families where id = $1", [famA])).rows[0].wife).toBe("Ann");
   });
 
   it("never lets anyone set someone else's family directly", async () => {
@@ -530,7 +537,10 @@ describe("weekly partners", () => {
   });
 
   it("shuts out a removed member", async () => {
+    await as("brother", "insert into public.person_prayers (member_id) values ($1)", [ids.admin]);
+    expect((await as("admin", "select * from public.person_prayers")).rows.length).toBe(1);
     expect((await as("removed", "select * from public.person_prayers")).rows).toEqual([]);
+    expect((await as("removed", "select * from public.week_extras")).rows).toEqual([]);
     await expect(as("removed", "insert into public.week_extras (week_of, family_id) values ('2026-11-22', $1)", [famA])).rejects.toThrow(/row-level security/);
   });
 });

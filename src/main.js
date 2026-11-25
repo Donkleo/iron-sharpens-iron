@@ -8,7 +8,7 @@ import {
   encourager, latestUpdate, updatedForMe, prayedCurrent, undoIds, similarOpen, ownerKey,
   weekPulse, weekNews, monthLabel, longMonth,
   upcomingEvents, eventsFor, dateRange, dateBlock, eventMonth, calendarLink, mapsLink, safeUrl,
-  familyLabel, weekOf, joinsNextWeek, partnerFamily, prayingFamily, memberOfFamily,
+  familyLabel, weekOf, joinsNextWeek, partnerFamily, prayingFamilies, memberOfFamily, familyKey,
   familyPrayers, prayersForPerson, personUndoIds, myExtras,
 } from "./logic.js";
 
@@ -128,22 +128,25 @@ function derive() {
   const fam = me?.family_id ? d.families.find((f) => f.id === me.family_id) || null : null;
   const partner = fam ? partnerFamily(d.families, fam.id) : null;
   const ex = myExtras(d.extras || [], myId());
+  const brother = partner ? memberOfFamily(d.members, partner.id) : null;
   D.week = {
-    me, fam, partner,
-    brother: partner ? memberOfFamily(d.members, partner.id) : null,
-    extraFams: ex.families.filter((x) => d.families.some((f) => f.id === x.family_id)),
-    extraMen: ex.members.filter((x) => d.members.some((m) => m.id === x.for_member)),
+    me, fam, partner, brother,
+    // Leave out an extra that's now your own family or this week's partner
+    // (after a mid-week change of family).
+    extraFams: ex.families.filter((x) => x.family_id !== fam?.id && x.family_id !== partner?.id && d.families.some((f) => f.id === x.family_id)),
+    extraMen: ex.members.filter((x) => x.for_member !== brother?.id && x.for_member !== myId() && d.members.some((m) => m.id === x.for_member)),
   };
+  // Who prays for each family this week, worked out once per redraw.
+  D.prayingFor = new Map();
+  for (const [fid, fams] of prayingFamilies(d.families)) {
+    D.prayingFor.set(fid, fams.flatMap((f) => d.members.filter((m) => m.family_id === f.id)));
+  }
 }
 // Who prayed for a person this week: for him, or for any of his requests.
 const whoPrayedFor = (memberId) => prayersForPerson(memberId, state.data.personPrayers || [], state.data.requests, D.by);
 const iPrayedFor = (memberId) => whoPrayedFor(memberId).includes(myId());
-// The brother whose family prays for this person's family this week.
-function prayingFor(m) {
-  if (!m?.family_id) return null;
-  const f = prayingFamily(state.data.families, m.family_id);
-  return f ? memberOfFamily(state.data.members, f.id) : null;
-}
+// The brothers whose family prays for this person's family this week.
+const prayingFor = (m) => (m?.family_id && D.prayingFor.get(m.family_id)) || [];
 const onMyList = (memberId) => D.week.brother?.id === memberId || D.week.extraMen.some((x) => x.for_member === memberId);
 const prayersOf = (r) => D.by.get(r.id) || [];
 const updatesFor = (r) => D.ups.get(r.id) || [];
@@ -462,7 +465,7 @@ const removeBtn = (x, name) => `<button class="btn quiet small" type="button" da
 // Pick your family once, like the app's "Which family is yours?".
 function familyPicker() {
   const W = D.week;
-  const fams = state.data.families.slice().sort((a, b) => normalize(a.name).localeCompare(normalize(b.name)));
+  const fams = state.data.families.slice().sort((a, b) => familyKey(a.name).localeCompare(familyKey(b.name)));
   return `<form class="weekfam" data-form="my-family" autocomplete="off">
     <div class="sec-head"><h2>Which family is yours?</h2></div>
     <p class="meta">Pick it once. Each Sunday you’ll get another family and a brother to pray for, and another family prays for yours.</p>
@@ -472,7 +475,8 @@ function familyPicker() {
       <option value="new">My family isn’t listed</option>
     </select></label>
     <label class="field new-family" hidden>Family name<input type="text" name="name" maxlength="80" placeholder="Smith" autocapitalize="words"></label>
-    <label class="field">Your wife’s first name <span class="meta">(optional)</span><input type="text" name="wife" maxlength="80" value="${esc(W.fam?.wife || "")}" autocapitalize="words"></label>
+    <label class="field">Your wife’s first name <span class="meta">(optional)</span><input type="text" name="wife" maxlength="80" autocapitalize="words"></label>
+    <p class="meta">Her name is only used if the family list doesn’t have it yet.</p>
     <div class="actions"><button class="btn primary small" type="submit">This is my family</button>${state.picking ? `<button class="btn quiet small" type="button" data-act="pick-cancel">Cancel</button>` : ""}</div>
   </form>`;
 }
@@ -588,14 +592,15 @@ function personWeek(p) {
   const self = m.id === myId();
   const first = firstName(m.display_name);
   const fam = m.family_id ? familyById(m.family_id) : null;
-  const pm = prayingFor(m);
+  const onList = !self && onMyList(m.id);
+  const others = prayingFor(m).filter((x) => x.id !== myId() && x.id !== m.id).map((x) => x.display_name);
   const lines = [];
   if (fam) lines.push(`${self ? "Your" : esc(first) + "’s"} family: ${esc(fam.name)}`);
-  if (pm) lines.push(pm.id === myId() ? `You’re praying for ${esc(first)} this week.` : `${esc(pm.display_name)} is praying for ${self ? "you" : esc(first)} this week.`);
+  if (onList) lines.push(`You’re praying for ${esc(first)} this week.`);
+  if (others.length) lines.push(`${esc(joinNames(others))} ${others.length === 1 ? "is" : "are"} ${onList ? "too" : `praying for ${self ? "you" : esc(first)} this week`}.`);
   const who = whoPrayedFor(m.id).map(nameOf);
   lines.push(who.length ? `\u{1F64F} ${esc(joinNames(who))} prayed for ${self ? "you" : esc(first)} this week.` : `No one has prayed for ${self ? "you" : esc(first)} yet this week.`);
-  const onList = onMyList(m.id);
-  const add = self || pm?.id === myId() ? ""
+  const add = self ? ""
     : onList ? `<span class="meta">On your list this week ✓</span>`
     : `<button class="btn quiet small" type="button" data-act="extra-add-man" data-id="${esc(m.id)}">Pray for ${esc(first)} this week too</button>`;
   return `<div class="weekbox">${lines.map((l) => `<span class="meta">${l}</span>`).join("")}
@@ -865,8 +870,9 @@ function personSub(p, rs) {
   if (state.data.weeklyReady && p.id) {
     const fam = p.family_id ? familyById(p.family_id) : null;
     if (fam) parts.push(fam.name + " family");
-    const pm = prayingFor(p);
-    if (pm) parts.push(pm.id === myId() ? "on your list this week ✓" : `${firstName(pm.display_name)} is praying this week`);
+    const others = prayingFor(p).filter((x) => x.id !== myId() && x.id !== p.id);
+    if (p.id !== myId() && onMyList(p.id)) parts.push("on your list this week ✓");
+    else if (others.length) parts.push(`${joinNames(others.map((x) => firstName(x.display_name)))} ${others.length === 1 ? "is" : "are"} praying this week`);
   }
   parts.push(countsLine(rs));
   return parts.join(" · ");

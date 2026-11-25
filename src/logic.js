@@ -394,9 +394,17 @@ export function partnerFamily(families, familyId, now = new Date()) {
   return fams[(i + offset) % n];
 }
 
-// The family whose turn it is to pray for this family this week.
-export function prayingFamily(families, familyId, now = new Date()) {
-  return families.find((f) => partnerFamily(families, f.id, now)?.id === familyId) || null;
+// For each family, the families praying for it this week. Usually one; a
+// sheet "Pray for" can add a second.
+export function prayingFamilies(families, now = new Date()) {
+  const m = new Map();
+  for (const f of families) {
+    const p = partnerFamily(families, f.id, now);
+    if (!p) continue;
+    if (!m.has(p.id)) m.set(p.id, []);
+    m.get(p.id).push(f);
+  }
+  return m;
 }
 
 // The brother in a family: the first one A to Z if there are two.

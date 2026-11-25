@@ -48,7 +48,10 @@ begin
     if nm is null then
       raise exception 'Pick your family or type its name.' using errcode = '22023';
     end if;
-    select f.id into fid from public.families f where lower(btrim(f.name)) = lower(nm);
+    -- "The Smiths" and "smiths" are the same family, as on the page.
+    select f.id into fid from public.families f
+    where regexp_replace(lower(btrim(f.name)), '^the\s+', '') = regexp_replace(lower(nm), '^the\s+', '')
+    order by f.created_at limit 1;
     if fid is null then
       insert into public.families (name, created_by) values (nm, auth.uid())
       on conflict do nothing
@@ -67,10 +70,11 @@ begin
   select nullif(split_part(btrim(m.display_name), ' ', 1), '') into first
   from public.members m where m.id = auth.uid();
 
-  -- Fill in the names the sheet hasn't given. The sheet sync still wins.
+  -- Only fill in names the family doesn't have yet, so nobody can change
+  -- another family's names. The sheet sync still wins.
   update public.families f set
     husband = coalesce(f.husband, left(first, 80)),
-    wife = coalesce(left(wf, 80), f.wife),
+    wife = coalesce(f.wife, left(wf, 80)),
     since = case when added then (now() at time zone 'America/Chicago')::date else f.since end
   where f.id = fid;
 

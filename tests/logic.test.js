@@ -3,7 +3,7 @@ import {
   prayerWeekStart, inThisWeek, weekFrom, thisWeek, latestByFamily, isCurrent, needsPrayer,
   prayersByRequest, iPrayedThisWeek, groupBy, matchesSearch, cleanFamilyName, esc, isEmail, ago,
   upcomingEvents, eventsFor, dateRange, eventEnd, calendarLink, mapsLink, safeUrl, dateBlock,
-  partnerFamily, prayingFamily, joinsNextWeek, memberOfFamily, familyLabel, prayersForPerson, personUndoIds,
+  partnerFamily, prayingFamilies, joinsNextWeek, memberOfFamily, familyLabel, prayersForPerson, personUndoIds,
   myExtras, weekOf,
 } from "../src/logic.js";
 
@@ -257,7 +257,8 @@ describe("weekly prayer circle", () => {
       const p = pairs(five, at);
       expect(new Set(p).size).toBe(5);
       five.forEach((f, i) => expect(p[i]).not.toBe(f.id));
-      five.forEach((f) => expect(prayingFamily(five, partnerFamily(five, f.id, at).id, at).id).toBe(f.id));
+      const praying = prayingFamilies(five, at);
+      five.forEach((f) => expect(praying.get(partnerFamily(five, f.id, at).id).map((x) => x.id)).toEqual([f.id]));
     }
   });
 
@@ -284,6 +285,9 @@ describe("weekly prayer circle", () => {
   it("follows the sheet's Pray for, and has no partner with one family", () => {
     const fams = [fam("a", "Adams", { pray_for: "The Clarks" }), fam("b", "Baker"), fam("c", "Clarks")];
     expect(partnerFamily(fams, "a", now).id).toBe("c");
+    // Two families can then pray for the same one; both are listed.
+    const both = prayingFamilies(fams, now).get("c").map((x) => x.id).sort();
+    expect(both.includes("a")).toBe(true);
     expect(partnerFamily([fam("a", "Adams")], "a", now)).toBeNull();
   });
 
