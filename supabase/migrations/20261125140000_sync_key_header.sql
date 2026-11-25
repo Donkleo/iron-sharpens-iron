@@ -10,8 +10,11 @@
 --     through it, which is the point: only the database owner, who runs the
 --     sync function, can read the key fingerprints.
 --   * Makes a sync more forgiving: an unknown "kind" (like "bible-study"),
---     an end date before the start, or text longer than the site allows no
---     longer stops the whole sync; they're dropped or shortened instead.
+--     an end date that's impossible or before the start, a link that isn't
+--     a plain https link, or text longer than the site allows no longer stops
+--     the whole sync; they're dropped or shortened instead.
+--   * Refuses an empty list that would clear a whole source, and more than
+--     2,000 events at once.
 --
 -- Apply once in the Supabase dashboard: SQL Editor, paste this file, Run.
 -- Run it after the calendar file (20261125000000_calendar.sql).
@@ -20,7 +23,7 @@ alter table private.sync_keys enable row level security;
 
 -- The x-sync-key header of the current API request, if any. PostgREST puts
 -- the request's headers (names in lower case) in the request.headers setting.
-create function private.header_sync_key() returns text
+create or replace function private.header_sync_key() returns text
 language plpgsql stable set search_path = ''
 as $$
 declare
@@ -35,6 +38,21 @@ exception when others then
 end;
 $$;
 revoke all on function private.header_sync_key() from public, anon, authenticated;
+
+-- A YYYY-MM-DD date, or null when the text isn't a real date (like 2027-02-30).
+create or replace function private.try_date(t text) returns date
+language plpgsql immutable set search_path = ''
+as $$
+begin
+  if t is null or t !~ '^\d{4}-\d{2}-\d{2}$' then
+    return null;
+  end if;
+  return t::date;
+exception when others then
+  return null;
+end;
+$$;
+revoke all on function private.try_date(text) from public, anon, authenticated;
 
 drop function public.sync_events(text, text, jsonb, date);
 
@@ -68,21 +86,28 @@ begin
   if jsonb_typeof(p_events) is distinct from 'array' then
     raise exception 'Events must be a JSON array.' using errcode = '22023';
   end if;
+  if jsonb_array_length(p_events) > 2000 then
+    raise exception 'Too many events at once (2,000 at most).' using errcode = '22023';
+  end if;
+  if p_replace_from is not null and jsonb_array_length(p_events) = 0 then
+    raise exception 'An empty list would remove every upcoming event from this source, so nothing was changed.' using errcode = '22023';
+  end if;
   if exists (select 1 from jsonb_array_elements(p_events) x
              where jsonb_typeof(x) is distinct from 'object'
-                or nullif(btrim(x->>'id'), '') is null or nullif(btrim(x->>'title'), '') is null
-                or coalesce(x->>'date', '') !~ '^\d{4}-\d{2}-\d{2}$') then
-    raise exception 'Every event needs an id, a title and a date (YYYY-MM-DD).' using errcode = '22023';
+                or nullif(btrim(x->>'id'), '') is null or length(btrim(x->>'id')) > 200
+                or nullif(btrim(x->>'title'), '') is null
+                or private.try_date(x->>'date') is null) then
+    raise exception 'Every event needs an id (200 characters at most), a title and a real date (YYYY-MM-DD).' using errcode = '22023';
   end if;
 
   insert into public.events as e
     (source, external_id, title, starts_on, ends_on, time_text, location, address, notes, url, kind, created_by)
-  select p_source, left(btrim(x->>'id'), 200), left(btrim(x->>'title'), 200), (x->>'date')::date,
-         case when x->>'end_date' ~ '^\d{4}-\d{2}-\d{2}$' and (x->>'end_date')::date >= (x->>'date')::date
-              then (x->>'end_date')::date end,
+  select p_source, btrim(x->>'id'), left(btrim(x->>'title'), 200), private.try_date(x->>'date'),
+         case when private.try_date(x->>'end_date') >= private.try_date(x->>'date')
+              then private.try_date(x->>'end_date') end,
          left(nullif(btrim(x->>'time'), ''), 40), left(nullif(btrim(x->>'location'), ''), 200),
          left(nullif(btrim(x->>'address'), ''), 300), left(nullif(btrim(x->>'notes'), ''), 2000),
-         case when btrim(x->>'url') ~* '^https://' and length(btrim(x->>'url')) <= 500
+         case when btrim(x->>'url') ~* '^https://[^\s"<>]+$' and length(btrim(x->>'url')) <= 500
               then 'https://' || substr(btrim(x->>'url'), 9) end,
          case when x->>'kind' = 'open' then 'open' end, null
   from (select distinct on (btrim(x->>'id')) x

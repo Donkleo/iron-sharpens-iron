@@ -332,9 +332,9 @@ describe("calendar", () => {
     await expect(as("anon", "select public.sync_events(p_key => null, p_source => 'church', p_events => '[]'::jsonb)")).rejects.toThrow(/Unknown sync key/);
     await expect(as("anon", "select public.sync_events(p_key => $1, p_source => 'group', p_events => '[]'::jsonb)", [KEY])).rejects.toThrow(/sheet or church/);
     await expect(as("anon", "select public.sync_events(p_key => $1, p_source => 'sheet', p_events => '[{\"title\":\"no id\",\"date\":\"2026-11-30\"}]'::jsonb)", [KEY]))
-      .rejects.toThrow(/needs an id, a title and a date/);
+      .rejects.toThrow(/needs an id .*a title and a real date/);
     await expect(as("anon", "select public.sync_events(p_key => $1, p_source => 'sheet', p_events => '[{\"id\":\"s9\",\"title\":\"no date\"}]'::jsonb)", [KEY]))
-      .rejects.toThrow(/needs an id, a title and a date/);
+      .rejects.toThrow(/needs an id .*a title and a real date/);
   });
 
   it("the sync key can't read anything or reach the key table", async () => {
@@ -442,16 +442,36 @@ describe("calendar sync key in a header", () => {
     expect(old.rows[0].n).toBe(1);
   });
 
+  it("an empty body key falls back to the header", async () => {
+    const r = await withHeaders(JSON.stringify({ "x-sync-key": KEY }), "select public.sync_events(p_key => '', p_source => 'church', p_events => $1::jsonb) as n", [ev]);
+    expect(r.rows[0].n).toBe(1);
+  });
+
+  it("refuses ids over 200 characters, impossible dates, an empty replace and huge lists", async () => {
+    const call = (items, replace) => withHeaders(JSON.stringify({ "x-sync-key": KEY }),
+      `select public.sync_events(p_source => 'sheet', p_events => $1::jsonb${replace ? ", p_replace_from => '2027-01-01'" : ""})`, [JSON.stringify(items)]);
+    await expect(call([{ id: "x".repeat(205), title: "Long id", date: "2027-01-09" }], true)).rejects.toThrow(/200 characters at most/);
+    await expect(call([{ id: "bad-date", title: "Bad", date: "2027-02-30" }])).rejects.toThrow(/real date/);
+    await expect(call([{ id: "zero", title: "Zero", date: "0000-01-01" }])).rejects.toThrow(/real date/);
+    await expect(call([], true)).rejects.toThrow(/empty list/);
+    await expect(call(Array.from({ length: 2001 }, (_, i) => ({ id: "n" + i, title: "n", date: "2027-01-09" })))).rejects.toThrow(/Too many/);
+    // Nothing from those calls was saved, and the sheet's earlier nights are still there.
+    const left = await db.query("select count(*)::int as n from public.events where external_id in ('bad-date', 'zero') or external_id like 'n%' or external_id like 'xxxx%'");
+    expect(left.rows[0].n).toBe(0);
+  });
+
   it("odd values are cleaned up instead of stopping the sync", async () => {
     const items = [
       { id: "h2", title: "Bible study at the Hills'", date: "2027-01-07", kind: "bible-study", end_date: "2027-01-01", time: "6:30pm" },
       { id: "h3", title: "x".repeat(300), date: "2027-01-08", kind: "open", url: "https://example.org/" + "a".repeat(600), location: "y".repeat(250) },
+      { id: "h4", title: "Retreat", date: "2027-01-09", end_date: "2027-13-01", url: 'https://example.org/"><script>' },
     ];
     await withHeaders(JSON.stringify({ "x-sync-key": KEY }), "select public.sync_events(p_source => 'sheet', p_events => $1::jsonb)", [JSON.stringify(items)]);
-    const rows = (await db.query("select external_id, kind, ends_on, time_text, length(title) as t, length(location) as l, url from public.events where external_id in ('h2', 'h3') order by external_id")).rows;
+    const rows = (await db.query("select external_id, kind, ends_on, time_text, length(title) as t, length(location) as l, url from public.events where external_id in ('h2', 'h3', 'h4') order by external_id")).rows;
     expect(rows).toEqual([
       { external_id: "h2", kind: null, ends_on: null, time_text: "6:30pm", t: 25, l: null, url: null },
       { external_id: "h3", kind: "open", ends_on: null, time_text: null, t: 200, l: 200, url: null },
+      { external_id: "h4", kind: null, ends_on: null, time_text: null, t: 7, l: null, url: null },
     ]);
   });
 });
@@ -464,34 +484,43 @@ describe("every table", () => {
   });
 });
 
-// In Supabase the tables and the sync function belong to the "postgres" role,
-// which is not a superuser. Check the sync still works that way, now that
-// row-level security is on for the key table.
+// In Supabase the SQL Editor runs as the "postgres" role, which owns the
+// tables and the sync function but is not a superuser. Apply every migration
+// that way in a fresh database, then check the sync still reads the key table
+// (row-level security is on) and writes events.
 describe("as Supabase sets it up (not a superuser)", () => {
-  it("the sync function still reads the key table and writes events", async () => {
-    await db.exec(`
-      create role owner_like_postgres nologin;
-      grant usage on schema private to owner_like_postgres;
-      alter schema private owner to owner_like_postgres;
-      alter table private.sync_keys owner to owner_like_postgres;
-      alter table public.events owner to owner_like_postgres;
-      alter function private.hash_key(text) owner to owner_like_postgres;
-      alter function private.header_sync_key() owner to owner_like_postgres;
-      alter function public.sync_events(text, jsonb, date, text) owner to owner_like_postgres;
-      grant usage on schema public to owner_like_postgres;
-      grant select on public.members to owner_like_postgres;
+  it("the migrations apply and the sync works", async () => {
+    const pg = new PGlite();
+    await pg.exec(readFileSync(join(import.meta.dirname, "supabase-stub.sql"), "utf8"));
+    await pg.exec(`
+      create role owner_like_postgres nologin nosuperuser nobypassrls;
+      grant all on schema public to owner_like_postgres;
+      grant usage on schema auth to owner_like_postgres;
+      grant select, trigger, references on auth.users to owner_like_postgres;
+      grant anon, authenticated to owner_like_postgres;
     `);
-    const KEY = "owner-test-key-0123456789abcdef";
-    await db.query("insert into private.sync_keys (key_hash) values (private.hash_key($1))", [KEY]);
-    await db.query("select set_config('request.headers', $1, false)", [JSON.stringify({ "x-sync-key": KEY })]);
-    try {
-      const r = await as("anon", "select public.sync_events(p_source => 'church', p_events => $1::jsonb) as n",
-        [JSON.stringify([{ id: "o1", title: "Owner test", date: "2027-02-01" }])]);
-      expect(r.rows[0].n).toBe(1);
-      await expect(as("anon", "select public.sync_events(p_key => 'wrong-key-wrong-key-wrong-key-wrong', p_source => 'church', p_events => '[]'::jsonb)"))
-        .rejects.toThrow(/Unknown sync key/);
-    } finally {
-      await db.query("select set_config('request.headers', '', false)");
+    const db0 = (await pg.query("select current_database() as d")).rows[0].d;
+    await pg.exec(`grant create on database "${db0}" to owner_like_postgres`);
+    const r0 = await pg.query("select rolsuper, rolbypassrls from pg_roles where rolname = 'owner_like_postgres'");
+    expect(r0.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+    await pg.exec("set role owner_like_postgres");
+    for (const f of readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+      await pg.exec(readFileSync(join(migrationsDir, f), "utf8"));
     }
+    const KEY = "owner-test-key-0123456789abcdef";
+    await pg.query("insert into private.sync_keys (key_hash) values (private.hash_key($1))", [KEY]);
+    await pg.exec("reset role");
+    await pg.query("select set_config('request.headers', $1, false)", [JSON.stringify({ "x-sync-key": KEY })]);
+    await pg.exec("set role anon");
+    const r = await pg.query("select public.sync_events(p_source => 'church', p_events => $1::jsonb) as n",
+      [JSON.stringify([{ id: "o1", title: "Owner test", date: "2027-02-01" }])]);
+    expect(r.rows[0].n).toBe(1);
+    await expect(pg.query("select public.sync_events(p_key => 'wrong-key-wrong-key-wrong-key-wrong', p_source => 'church', p_events => '[]'::jsonb)"))
+      .rejects.toThrow(/Unknown sync key/);
+    await expect(pg.query("select * from private.sync_keys")).rejects.toThrow(/permission denied/);
+    await pg.exec("reset role");
+    const owner = await pg.query("select tableowner from pg_tables where schemaname = 'private' and tablename = 'sync_keys'");
+    expect(owner.rows[0].tableowner).toBe("owner_like_postgres");
+    await pg.close();
   });
 });

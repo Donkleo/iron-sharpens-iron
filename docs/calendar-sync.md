@@ -37,6 +37,22 @@ it's allowed to. In that environment's settings:
 The environment adds the header to every request to that host, so the key is
 never written into the sync's instructions and the sync never sees it.
 
+## Check it once
+
+From that environment, a call with a made-up key must be refused. Put it in
+the body, where it takes priority over the header:
+
+```sh
+curl -s -X POST "<SUPABASE_URL>/rest/v1/rpc/sync_events" \
+  -H "apikey: <ANON_KEY>" -H "Content-Type: application/json" \
+  --data '{"p_key":"made-up-key-made-up-key-made-up","p_source":"church","p_events":[]}'
+```
+
+The answer should say "Unknown sync key.". The same call without `p_key`
+should answer `0`, which shows the header arrived and the key matched.
+After the first real run, look once at the request logs in Supabase to make
+sure the key header isn't shown there in full.
+
 ## 3. What a sync sends
 
 A POST to `<SUPABASE_URL>/rest/v1/rpc/sync_events` with the project's public
@@ -63,9 +79,14 @@ key in the `apikey` header (it's public: the site itself uses it), the
 - Running again updates events in place, matched on `id`. Church events an
   admin hid stay hidden.
 - With `p_replace_from`, that source's events on or after that day that
-  aren't in the list are removed. Leave it out to only add and update. Never
-  send an empty list with `p_replace_from`: it would clear that source's
-  upcoming events (the next good run puts them back).
+  aren't in the list are removed. Leave it out to only add and update. An
+  empty list with `p_replace_from` is refused, so a failed sheet read can't
+  clear the calendar.
+- At most 2,000 events per call. An event with no id, an id over 200
+  characters, no title, or a date that isn't real stops the call with a
+  clear message and nothing is changed. Other odd values (an end date before
+  the start, a link that isn't a plain https link, text that's too long) are
+  dropped or shortened.
 - The answer is the number of events saved. A wrong or missing key gets
   "Unknown sync key." and changes nothing.
 - The key can also be sent in the body as `p_key`, but the header keeps it
