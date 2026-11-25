@@ -17,8 +17,8 @@ select private.hash_key(key), 'calendar sync' from k
 returning (select key from k) as copy_this_key;
 ```
 
-Keep the key somewhere private, like the sync's own settings. To turn a key
-off, delete its row: `delete from private.sync_keys;`
+Keep the key somewhere private, like the sync's own settings. To turn every
+sync key off, run `delete from private.sync_keys;` (then make a new one).
 
 ## What a sync sends
 

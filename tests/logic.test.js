@@ -207,6 +207,17 @@ describe("calendar", () => {
     expect(eventsFor(events, "hidden", now).map((e) => e.title)).toEqual(["Hidden"]);
   });
 
+  it("sorts same-day events by clock time, not by the text", () => {
+    const day = [ev({ title: "Supper", starts_on: "2026-11-28", time_text: "6:30 PM" }), ev({ title: "Brunch", starts_on: "2026-11-28", time_text: "10:00 AM" }),
+      ev({ title: "Run", starts_on: "2026-11-28", time_text: "7:00am" }), ev({ title: "All day", starts_on: "2026-11-28" })];
+    expect(upcomingEvents(day, 14, now).map((e) => e.title)).toEqual(["All day", "Run", "Brunch", "Supper"]);
+  });
+
+  it("Coming up reaches the 14th day even across a clock change", () => {
+    const beforeDst = new Date(2026, 9, 30, 12); // Oct 30; clocks change on Nov 1 in the US
+    expect(upcomingEvents([ev({ title: "Two weeks out", starts_on: "2026-11-13" })], 14, beforeDst)).toHaveLength(1);
+  });
+
   it("ignores an end day before the start", () => {
     expect(eventEnd({ starts_on: "2026-11-28", ends_on: "2026-11-20" })).toBe("2026-11-28");
   });

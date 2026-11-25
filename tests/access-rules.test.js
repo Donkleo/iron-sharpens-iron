@@ -332,7 +332,9 @@ describe("calendar", () => {
     await expect(as("anon", "select public.sync_events(null, 'church', '[]'::jsonb)")).rejects.toThrow(/Unknown sync key/);
     await expect(as("anon", "select public.sync_events($1, 'group', '[]'::jsonb)", [KEY])).rejects.toThrow(/sheet or church/);
     await expect(as("anon", "select public.sync_events($1, 'sheet', '[{\"title\":\"no id\",\"date\":\"2026-11-30\"}]'::jsonb)", [KEY]))
-      .rejects.toThrow(/events_synced_have_ids/);
+      .rejects.toThrow(/needs an id, a title and a date/);
+    await expect(as("anon", "select public.sync_events($1, 'sheet', '[{\"id\":\"s9\",\"title\":\"no date\"}]'::jsonb)", [KEY]))
+      .rejects.toThrow(/needs an id, a title and a date/);
   });
 
   it("the sync key can't read anything or reach the key table", async () => {
@@ -361,6 +363,24 @@ describe("calendar", () => {
     expect(r.rows).toEqual([{ external_id: "s1" }]);
     // Church events were left alone.
     expect((await db.query("select count(*)::int as n from public.events where source = 'church'")).rows[0].n).toBe(2);
+  });
+
+  it("a repeated item or a plain http link doesn't stop the sync", async () => {
+    const sheet = [
+      { id: "s1", title: "Bible study", date: "2026-11-30", url: "http://example.org/old" },
+      { id: "s1", title: "Bible study at the Hills", date: "2026-11-30", url: "HTTPS://example.org/a" },
+    ];
+    const r = await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01') as n", [KEY, JSON.stringify(sheet)]);
+    expect(r.rows[0].n).toBe(1);
+    const row = (await db.query("select title, url from public.events where source = 'sheet'")).rows;
+    expect(row).toEqual([{ title: "Bible study at the Hills", url: "https://example.org/a" }]);
+    await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01')", [KEY, JSON.stringify(sheet.slice(0, 1))]);
+    expect((await db.query("select url from public.events where source = 'sheet'")).rows[0].url).toBeNull();
+  });
+
+  it("sheet events can't be hidden from the site, even by an admin", async () => {
+    await as("admin", "update public.events set hidden = true where source = 'sheet'");
+    expect((await db.query("select bool_or(hidden) as h from public.events where source = 'sheet'")).rows[0].h).toBe(false);
   });
 
   it("members can't delete church or sheet events", async () => {

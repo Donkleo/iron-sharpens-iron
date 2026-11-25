@@ -162,7 +162,7 @@ function render() {
   const tabId = state.tab in views ? state.tab : "week";
   const foot = tabId === "week" ? "" : footer();
   // The invite list opens from the footer, so it has no tab of its own.
-  const panel = tabId === "group" ? `aria-label="Invite list"` : `role="tabpanel" aria-labelledby="tab-${tabId}"`;
+  const panel = tabId === "group" ? `aria-label="Invite list" tabindex="-1"` : `role="tabpanel" aria-labelledby="tab-${tabId}"`;
   app.innerHTML = shell(tabs() + `<section class="view" id="panel-${tabId}" ${panel}>${view}</section>${foot}`) + prayNowView();
   document.body.classList.toggle("noscroll", !!state.prayNow);
   if (state.prayNow && state.prayNow.focus !== state.prayNow.i) {
@@ -184,7 +184,7 @@ function shell(inner) {
 function whoAmI() {
   const me = state.data?.members.find((m) => m.id === myId());
   return `<div class="whoami"><span class="meta">You’re ${esc(me?.display_name || state.session?.user?.email || "")}</span>
-    <span class="actions">${state.admin ? `<button class="btn quiet small" type="button" data-act="tab" data-tab="group">Invite list</button>` : ""}<button class="btn quiet small" type="button" data-act="sign-out">Sign out</button></span></div>`;
+    <span class="actions">${state.admin ? `<button class="btn quiet small" type="button" data-act="tab" data-tab="group"${state.tab === "group" ? ` aria-current="page"` : ""}>Invite list</button>` : ""}<button class="btn quiet small" type="button" data-act="sign-out">Sign out</button></span></div>`;
 }
 const footer = () => `<footer class="foot">${whoAmI()}</footer>`;
 
@@ -772,7 +772,7 @@ function eventRow(e) {
 function viewCalendar() {
   if (!state.data.calendarReady) {
     return `<div class="card"><h2>The calendar is almost ready</h2>
-      <p class="lede">${state.admin ? "It needs its one-time database step. The steps are in the README, under Calendar setup." : "The group leader still has one setup step to do. Check back soon."}</p></div>`;
+      <p class="lede">${state.admin ? "It needs its one-time database step. The steps are in the README, step 6." : "The group leader still has one setup step to do. Check back soon."}</p></div>`;
   }
   if (state.when === "hidden" && !state.admin) state.when = "upcoming";
   const evs = eventsFor(state.data.events, state.when);
@@ -800,7 +800,7 @@ function viewCalendar() {
     <div class="sec">
       <div class="toolbar">
         <h2 class="sr">Events</h2>
-        <div class="seg" role="group" aria-label="Show">${seg.map(([k, label]) => `<button type="button" data-act="when" data-when="${k}" aria-pressed="${state.when === k}">${esc(label)}</button>`).join("")}</div>
+        <div class="seg" role="group" aria-label="Show">${seg.map(([k, label]) => `<button type="button" data-act="when" data-when="${k}" data-id="${k}" aria-pressed="${state.when === k}">${esc(label)}</button>`).join("")}</div>
         <span class="meta legend"><span class="pill moss">Lifegroup</span> from the group's sheet · <span class="pill steel">Church</span> from the church calendar</span>
       </div>
       ${evs.length ? `<div>${list}</div>` : `<div class="empty">${state.when === "upcoming" ? "No upcoming events. Add a group event above."
@@ -872,7 +872,9 @@ app.addEventListener("click", async (e) => {
 
 async function handleClick(b, id, what) {
   switch (what) {
-    case "tab": state.tab = b.dataset.tab; state.form = null; state.confirm = null; state.picked.clear(); render(); window.scrollTo(0, 0); break;
+    case "tab": state.tab = b.dataset.tab; state.form = null; state.confirm = null; state.picked.clear(); render(); window.scrollTo(0, 0);
+      if (state.tab === "group") app.querySelector("#panel-group")?.focus({ preventScroll: true });
+      break;
     case "sign-out": await supabase.auth.signOut(); break;
     case "retry": await refresh(); break;
     case "open-update": state.form = { kind: "update", id, ctx: b.dataset.ctx }; state.confirm = null; render(); focusForm(); break;

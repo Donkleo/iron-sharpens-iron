@@ -4,7 +4,8 @@
 --   * Every signed-in member can see the calendar and add a group event.
 --   * Whoever added a group event, or an admin, can delete it.
 --   * Lifegroup sheet and church events come from the syncs. Only an admin
---     can hide or bring back one of those, so nobody hides one by accident.
+--     can hide or bring back a church event, so nobody hides one by accident.
+--     Sheet events change only in the sheet.
 --   * The syncs write through public.sync_events with a sync key that only
 --     the database knows (stored as a hash). The key can only add, change or
 --     remove sheet and church events; it can't read or touch prayers.
@@ -57,8 +58,21 @@ create policy events_select on public.events for select to authenticated
 create policy events_insert on public.events for insert to authenticated
   with check ((select public.is_member()) and source = 'group' and created_by = (select auth.uid()));
 create policy events_hide on public.events for update to authenticated
-  using ((select public.is_admin()) and source <> 'group')
-  with check ((select public.is_admin()) and source <> 'group');
+  using ((select public.is_admin()) and source = 'church')
+  with check ((select public.is_admin()) and source = 'church');
+
+-- Note when an event last changed (hiding included).
+create function public.touch_event() returns trigger
+language plpgsql set search_path = ''
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+revoke all on function public.touch_event() from public, anon, authenticated;
+create trigger touch_event before update on public.events
+  for each row execute function public.touch_event();
 create policy events_delete on public.events for delete to authenticated
   using ((select public.is_member()) and source = 'group'
          and (created_by = (select auth.uid()) or (select public.is_admin())));
@@ -85,7 +99,9 @@ as $$ select encode(pg_catalog.sha256(convert_to(k, 'UTF8')), 'hex') $$;
 -- Add or update sheet or church events, matched on external_id. When
 -- p_replace_from is given, that source's events on or after that day that
 -- aren't in p_events are removed (a night taken off the sheet disappears).
--- Hidden church events stay hidden. Returns how many events were saved.
+-- Hidden church events stay hidden while they're in the sync. If the same
+-- items appear twice, the last one wins; a link that isn't https is dropped.
+-- Returns how many events were saved.
 --
 -- p_events is a JSON array of objects with: id (the sync's own id), title,
 -- date (YYYY-MM-DD), and optionally end_date, time, location, address, notes,
@@ -107,13 +123,22 @@ begin
   if jsonb_typeof(p_events) is distinct from 'array' then
     raise exception 'Events must be a JSON array.' using errcode = '22023';
   end if;
+  if exists (select 1 from jsonb_array_elements(p_events) x
+             where nullif(btrim(x->>'id'), '') is null or nullif(btrim(x->>'title'), '') is null
+                or coalesce(x->>'date', '') !~ '^\d{4}-\d{2}-\d{2}$') then
+    raise exception 'Every event needs an id, a title and a date (YYYY-MM-DD).' using errcode = '22023';
+  end if;
 
   insert into public.events as e
     (source, external_id, title, starts_on, ends_on, time_text, location, address, notes, url, kind, created_by)
   select p_source, x->>'id', btrim(x->>'title'), (x->>'date')::date, nullif(x->>'end_date', '')::date,
          nullif(btrim(x->>'time'), ''), nullif(btrim(x->>'location'), ''), nullif(btrim(x->>'address'), ''),
-         nullif(btrim(x->>'notes'), ''), nullif(btrim(x->>'url'), ''), nullif(x->>'kind', ''), null
-  from jsonb_array_elements(p_events) x
+         nullif(btrim(x->>'notes'), ''),
+         case when btrim(x->>'url') ~* '^https://' then 'https://' || substr(btrim(x->>'url'), 9) end,
+         nullif(x->>'kind', ''), null
+  from (select distinct on (x->>'id') x
+        from jsonb_array_elements(p_events) with ordinality as a(x, i)
+        order by x->>'id', i desc) d
   on conflict (source, external_id) do update set
     title = excluded.title, starts_on = excluded.starts_on, ends_on = excluded.ends_on,
     time_text = excluded.time_text, location = excluded.location, address = excluded.address,

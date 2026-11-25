@@ -283,14 +283,24 @@ export function longMonth(iso) {
 // An event's last day (the start day for one-day events).
 export const eventEnd = (e) => (e.ends_on && e.ends_on >= e.starts_on ? e.ends_on : e.starts_on);
 
-const dayKey = (e) => String(e.starts_on) + " " + String(e.time_text || "");
+// "7:00 AM" or "6:30pm" as minutes after midnight; no time sorts first.
+function timeMinutes(t) {
+  const m = /(\d{1,2})(?::(\d\d))?\s*([ap])/i.exec(String(t || ""));
+  if (!m) return -1;
+  return ((Number(m[1]) % 12) + (m[3].toLowerCase() === "p" ? 12 : 0)) * 60 + Number(m[2] || 0);
+}
+const bySoonest = (a, b) => String(a.starts_on).localeCompare(String(b.starts_on))
+  || timeMinutes(a.time_text) - timeMinutes(b.time_text)
+  || String(a.time_text || "").localeCompare(String(b.time_text || ""));
 
 // Events that haven't ended yet and start within the next `days` days, soonest first.
 export function upcomingEvents(events, days, now = new Date()) {
   const today = ymd(now);
-  const end = ymd(new Date(startOfDay(now).getTime() + days * DAY));
+  const last = startOfDay(now);
+  last.setDate(last.getDate() + days);
+  const end = ymd(last);
   return events.filter((e) => !e.hidden && e.starts_on && eventEnd(e) >= today && e.starts_on <= end)
-    .sort((a, b) => dayKey(a).localeCompare(dayKey(b)));
+    .sort(bySoonest);
 }
 
 // The Calendar tab's lists: "upcoming" (soonest first), "past" (newest first) or "hidden".
@@ -298,7 +308,7 @@ export function eventsFor(events, when, now = new Date()) {
   const today = ymd(now);
   return events.filter((e) => e.starts_on && (when === "hidden" ? e.hidden
     : !e.hidden && (when === "past" ? eventEnd(e) < today : eventEnd(e) >= today)))
-    .sort((a, b) => (when === "upcoming" ? dayKey(a).localeCompare(dayKey(b)) : String(b.starts_on).localeCompare(String(a.starts_on))));
+    .sort((a, b) => (when === "upcoming" ? bySoonest(a, b) : String(b.starts_on).localeCompare(String(a.starts_on))));
 }
 
 const parseDay = (s) => {
