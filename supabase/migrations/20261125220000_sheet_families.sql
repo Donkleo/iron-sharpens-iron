@@ -8,9 +8,11 @@
 --     prayer rotation uses it so a new family joins on the following Sunday
 --     and nobody's partner changes mid-week. A family that's already here
 --     keeps its "since" as it is.
---   * A family taken off the sheet is removed, unless prayers are filed under
---     it; then it stays (so no prayer is lost) and just stops being a sheet
---     family. Families added on the site are never removed by the sync.
+--   * A family the sheet added and then took off is removed, unless prayers
+--     are filed under it; then it stays (so no prayer is lost) and just stops
+--     being a sheet family. A family first added on the site is never removed
+--     by the sync: if it's on the sheet too, the sheet fills in its details,
+--     and when it leaves the sheet it simply stops being a sheet family.
 --
 -- Apply once in the Supabase dashboard: SQL Editor, paste this file, Run.
 -- Run it after 20261125140000_sync_key_header.sql.
@@ -21,7 +23,8 @@ alter table public.families
   add column pray_for   text check (pray_for is null or length(pray_for) <= 2000),
   add column sort_order integer,
   add column since      date,
-  add column from_sheet boolean not null default false;
+  add column from_sheet boolean not null default false,
+  add column added_by_sheet boolean not null default false;
 
 -- Raises "Unknown sync key." unless the key (from p_key or the x-sync-key
 -- header) matches a stored key.
@@ -82,17 +85,18 @@ begin
         from jsonb_array_elements(p_families) with ordinality as a(x, i)
         order by lower(btrim(x->>'name')), i desc) d;
 
-  insert into public.families as f (name, husband, wife, pray_for, sort_order, since, from_sheet, created_by)
-  select s.name, s.husband, s.wife, s.pray_for, s.sort_order, today, true, null
+  insert into public.families as f (name, husband, wife, pray_for, sort_order, since, from_sheet, added_by_sheet, created_by)
+  select s.name, s.husband, s.wife, s.pray_for, s.sort_order, today, true, true, null
   from jsonb_to_recordset(clean) as s(name text, husband text, wife text, pray_for text, sort_order integer)
   on conflict ((lower(btrim(name)))) do update set
     name = excluded.name, husband = excluded.husband, wife = excluded.wife,
     pray_for = excluded.pray_for, sort_order = excluded.sort_order, from_sheet = true;
   get diagnostics n = row_count;
 
-  -- Off the sheet: remove it, or keep it as a site family if prayers use it.
+  -- Off the sheet: remove a family the sheet added, unless prayers use it;
+  -- every other one stays as a site family.
   delete from public.families f
-  where f.from_sheet
+  where f.from_sheet and f.added_by_sheet
     and not exists (select 1 from jsonb_to_recordset(clean) as s(name text)
                     where lower(s.name) = lower(btrim(f.name)))
     and not exists (select 1 from public.requests r where r.family_id = f.id);

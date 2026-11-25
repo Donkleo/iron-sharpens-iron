@@ -13,7 +13,7 @@ const TODAY = "2026-11-25";
 const KEY = "test-sync-key-0123456789abcdef0123456789";
 
 // Loads the script with fake Google services. Returns its functions and what it sent.
-function load({ tabs, props, respond } = {}) {
+function load({ tabs, props, respond, locked } = {}) {
   const sent = [];
   const logs = [];
   const triggers = [];
@@ -25,6 +25,7 @@ function load({ tabs, props, respond } = {}) {
   const context = {
     module: { exports: {} },
     Logger: { log: (m) => logs.push(String(m)) },
+    LockService: { getScriptLock: () => ({ tryLock: () => !locked, releaseLock: () => {} }) },
     Utilities: { formatDate: () => TODAY },
     PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => settings[k] ?? null }) },
     SpreadsheetApp: {
@@ -64,7 +65,7 @@ function sampleTabs() {
     "2026 Q4": [
       ["Lifegroup nights", "", "", ""],
       ["“Iron sharpens iron” Proverbs 27:17", "", "", ""],
-      ["Date", "Notes", "Host", "Address (home)"],
+      ["Date", "Notes", "Host", "Address "],
       ["11/18/26", "", "Oelkers", "10 Past Rd"],
       ["Tue 11/25/26", "", "Farag's", " 20 Main St "],
       ["12/2/2026", "", "", "30 Should Be Hidden"],
@@ -90,7 +91,7 @@ function sampleTabs() {
     Families: [
       ["Families"],
       ["A verse"],
-      ["Family", "Husband", "Wife", "Pray for"],
+      ["Family", "Husband", "Wife", "Pray for (optional)"],
       ["The Weeks", "Sam", "Ana", "New job"],
       ["", "", "", ""],
       ["Peñas", "Luis", "", ""],
@@ -173,7 +174,33 @@ describe("reading the sheet", () => {
     expect(run({ "2026 Q4": tabs["2026 Q4"], Events: tabs.Events })).toThrow(/No "Families" tab/);
     expect(run({ ...tabs, "2027 Q1": [["When", "Who"]] })).toThrow(/2027 Q1.*no header row/);
     expect(run({ ...tabs, Events: [["Day", "Event"]] })).toThrow(/Events tab has no header/);
-    expect(run({ ...tabs, Families: [["Family", "Husband"]] })).toThrow(/no families/);
+    expect(run({ ...tabs, Families: [["Family", "Husband", "Wife"], ["Weeks", "", ""]] })).toThrow(/no "Pray for" column/);
+    expect(run({ ...tabs, Families: [["Family", "Husband", "Prayer"]] })).toThrow(/Family, Husband and Wife/);
+    expect(run({ ...tabs, Families: [["Family", "Husband", "Wife", "Pray for"]] })).toThrow(/no families/);
+  });
+
+  it("stops when a tab's dates can't be read, so a format change can't clear the calendar", () => {
+    const tabs = sampleTabs();
+    const run = (t) => () => s.buildSync(Object.keys(t), (n) => t[n], TODAY);
+    expect(run({ ...tabs, "2027 Q1": [["Date", "Host"], ["January 6, 2027", "O'Neals"]] })).toThrow(/2027 Q1.*dates can't be read/);
+    expect(run({ ...tabs, Events: [["Date", "Event"], ["Dec 5", "Party"]] })).toThrow(/Events tab's dates/);
+    // One odd cell among readable dates is just skipped.
+    expect(run({ ...tabs, "2027 Q1": [["Date", "Host"], ["TBD", "x"], ["1/6/27", "O'Neals"]] })).not.toThrow();
+    expect(s.parseDate("111/3/26")).toBe("");
+  });
+
+  it("only removes nights when this quarter's tab is there", () => {
+    const tabs = sampleTabs();
+    const names = (t) => Object.keys(t);
+    expect(s.quarterName("2026-11-25")).toBe("2026 Q4");
+    expect(s.buildSync(names(tabs), (n) => tabs[n], TODAY).replace).toBe(true);
+    const renamed = { ...tabs };
+    renamed["Q4 2026"] = renamed["2026 Q4"];
+    delete renamed["2026 Q4"];
+    delete renamed["2027 Q1"];
+    const r = s.buildSync(names(renamed), (n) => renamed[n], TODAY);
+    expect(r.replace).toBe(false);
+    expect(r.currentQuarter).toBe("2026 Q4");
   });
 });
 
@@ -192,6 +219,7 @@ describe("sending to the site", () => {
       expect(r.body.p_key).toBe(KEY);
     }
     expect(s.sent[0].body).toMatchObject({ p_source: "sheet", p_replace_from: TODAY });
+    expect(s.sent[1].body.p_families[0].pray_for).toBe("New job");
     expect(s.sent[0].body.p_events.length).toBe(7);
     expect(s.sent[1].body.p_families.length).toBe(2);
   });
@@ -203,6 +231,28 @@ describe("sending to the site", () => {
     expect(log).not.toContain(KEY);
     expect(log).not.toMatch(/Main St|Weeks|Farag|Pine/);
     expect(log).toMatch(/3 upcoming events synced/);
+  });
+
+  it("only adds and updates nights when this quarter's tab is missing", () => {
+    const tabs = sampleTabs();
+    tabs["Q4 2026"] = tabs["2026 Q4"];
+    delete tabs["2026 Q4"];
+    delete tabs["2027 Q1"];
+    const s = load({ tabs });
+    s.syncLifegroupSheet();
+    expect(s.sent[0].body.p_replace_from).toBeUndefined();
+    expect(s.logs.join(" ")).toMatch(/not removed/);
+  });
+
+  it("skips a run while another is still going", () => {
+    const s = load({ locked: true });
+    s.syncLifegroupSheet();
+    expect(s.sent).toEqual([]);
+    expect(s.logs.join(" ")).toMatch(/skipped/);
+  });
+
+  it("is plain text, so copying it on a phone can't damage it", () => {
+    expect(/[^\x00-\x7f]/.test(source)).toBe(false);
   });
 
   it("doesn't send an empty calendar, so a bad read can't clear it", () => {
@@ -222,6 +272,8 @@ describe("sending to the site", () => {
     expect(() => load({ props: { SUPABASE_URL: "https://abcd.supabase.co/rest/v1", SUPABASE_ANON_KEY: "a", SYNC_KEY: KEY } })
       .syncLifegroupSheet()).toThrow(/nothing after it/);
     expect(() => load({ props: { SUPABASE_URL: "http://abcd.supabase.co", SUPABASE_ANON_KEY: "a", SYNC_KEY: KEY } })
+      .syncLifegroupSheet()).toThrow(/should look like/);
+    expect(() => load({ props: { SUPABASE_URL: "https://abcd.supabase.co.evil.example", SUPABASE_ANON_KEY: "a", SYNC_KEY: KEY } })
       .syncLifegroupSheet()).toThrow(/should look like/);
   });
 
@@ -297,6 +349,17 @@ describe("the site's family sync", () => {
       { name: "Peñas", husband: "Luis", wife: null, pray_for: null, sort_order: 2, since: today, from_sheet: true },
       { name: "Weeks", husband: "Sam", wife: "Ana", pray_for: "New job", sort_order: 1, since: today, from_sheet: true },
     ]);
+  });
+
+  it("never removes a family first added on the site, even after the sheet listed it", async () => {
+    await db.exec("insert into public.families (name, created_by) values ('Adopted', null)");
+    await syncFamilies([{ name: "Weeks" }, { name: "Peñas" }, { name: "adopted", husband: "Al" }]);
+    let a = (await families()).find((f) => f.name === "adopted");
+    expect(a).toMatchObject({ from_sheet: true, husband: "Al", since: null });
+    await syncFamilies([{ name: "Weeks" }, { name: "Peñas" }]);
+    a = (await families()).find((f) => f.name === "adopted");
+    expect(a).toMatchObject({ from_sheet: false, sort_order: null });
+    await db.exec("delete from public.families where name = 'adopted'");
   });
 
   it("keeps a family's since, follows the sheet's order and spelling, and keeps site families", async () => {

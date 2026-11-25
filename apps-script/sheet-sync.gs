@@ -1,7 +1,7 @@
 /**
  * @OnlyCurrentDoc
  *
- * Iron Sharpens Iron: lifegroup sheet → website
+ * Iron Sharpens Iron: lifegroup sheet -> website
  *
  * Runs inside the lifegroup Google Sheet (Extensions > Apps Script) and sends
  * the sheet's upcoming nights, the Events tab and the Families tab to the
@@ -41,6 +41,19 @@ function stopSync() {
 
 /** The hourly sync. */
 function syncLifegroupSheet() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    Logger.log('Another sync is still running, so this one was skipped.');
+    return;
+  }
+  try {
+    syncOnce_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function syncOnce_() {
   var settings = readSettings_();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var today = Utilities.formatDate(new Date(), TIME_ZONE, 'yyyy-MM-dd');
@@ -50,10 +63,15 @@ function syncLifegroupSheet() {
   }, today);
 
   if (data.events.length) {
-    var n = callSite_(settings, 'sync_events', {
-      p_source: 'sheet', p_replace_from: today, p_events: data.events, p_key: settings.key
-    });
+    var body = { p_source: 'sheet', p_events: data.events, p_key: settings.key };
+    // Nights taken off the sheet are removed, but only when this quarter's tab
+    // (or a later one) is there to compare against.
+    if (data.replace) body.p_replace_from = today;
+    var n = callSite_(settings, 'sync_events', body);
     Logger.log('Calendar: ' + n + ' upcoming events synced.');
+    if (!data.replace) {
+      Logger.log('No tab for this quarter yet (like "' + data.currentQuarter + '"), so nights were only added or updated, not removed.');
+    }
   } else {
     // The site refuses an empty list rather than clear the calendar.
     Logger.log('Calendar: no upcoming events in the sheet, so the calendar was left as it is.');
@@ -73,6 +91,7 @@ function syncLifegroupSheet() {
  */
 function buildSync(tabNames, readTab, today) {
   var quarters = quarterTabs(tabNames);
+  var current = quarterName(today);
   if (!quarters.length) throw new Error('No quarter tab (like "2026 Q4") was found, so nothing was sent.');
   if (tabNames.indexOf('Events') < 0) throw new Error('No "Events" tab was found, so nothing was sent.');
   if (tabNames.indexOf('Families') < 0) throw new Error('No "Families" tab was found, so nothing was sent.');
@@ -84,14 +103,16 @@ function buildSync(tabNames, readTab, today) {
     if (!h) throw new Error('Tab "' + tab + '" has no header row with Date and Host, so nothing was sent.');
     var cDate = col(h.cells, 'Date'), cHost = col(h.cells, 'Host');
     var cAddr = col(h.cells, 'Address', true), cTime = col(h.cells, 'Time');
-    rows.slice(h.index + 1).forEach(function (r) {
+    var body = rows.slice(h.index + 1);
+    checkDates(body, cDate, 'Tab "' + tab + '"');
+    body.forEach(function (r) {
       var date = parseDate(cell(r, cDate));
       if (!date || date < today) return;
       var host = cell(r, cHost);
       var ev = { id: 'sheet-' + date, date: date, time: cTime >= 0 && cell(r, cTime) ? formatTime(cell(r, cTime)) : DEFAULT_TIME,
                  location: '', address: cell(r, cAddr), notes: '' };
       if (!host) {
-        ev.title = 'Bible study · host needed';
+        ev.title = 'Bible study \u00b7 host needed';
         ev.kind = 'open';
         ev.address = '';
       } else if (/ at /i.test(host)) {
@@ -108,6 +129,7 @@ function buildSync(tabNames, readTab, today) {
   if (!eh) throw new Error('The Events tab has no header row with Date and Event, so nothing was sent.');
   var e = { date: col(eh.cells, 'Date'), time: col(eh.cells, 'Time'), title: col(eh.cells, 'Event'),
             location: col(eh.cells, 'Location'), address: col(eh.cells, 'Address', true), notes: col(eh.cells, 'Notes') };
+  checkDates(er.slice(eh.index + 1), e.date, 'The Events tab');
   er.slice(eh.index + 1).forEach(function (r) {
     var date = parseDate(cell(r, e.date)), title = cell(r, e.title);
     if (!date || !title || date < today) return;
@@ -117,10 +139,11 @@ function buildSync(tabNames, readTab, today) {
   });
 
   var fr = readTab('Families');
-  var fh = findHeader(fr, ['Family', 'Husband']);
-  if (!fh) throw new Error('The Families tab has no header row with Family and Husband, so nothing was sent.');
+  var fh = findHeader(fr, ['Family', 'Husband', 'Wife']);
+  if (!fh) throw new Error('The Families tab has no header row with Family, Husband and Wife, so nothing was sent.');
   var f = { name: col(fh.cells, 'Family'), husband: col(fh.cells, 'Husband'), wife: col(fh.cells, 'Wife'),
-            prayFor: col(fh.cells, 'Pray for') };
+            prayFor: col(fh.cells, 'Pray for', true) };
+  if (f.prayFor < 0) throw new Error('The Families tab has no "Pray for" column, so nothing was sent.');
   var families = [];
   fr.slice(fh.index + 1).forEach(function (r) {
     var name = cell(r, f.name).replace(/^the\s+/i, '').trim();
@@ -129,13 +152,37 @@ function buildSync(tabNames, readTab, today) {
   });
   if (!families.length) throw new Error('The Families tab has no families, so nothing was sent.');
 
-  return { events: events, families: families };
+  return { events: events, families: families, replace: quarterKey(quarters[0]) >= quarterKey(current),
+           currentQuarter: current };
+}
+
+/** "2026-11-25" -> "2026 Q4". */
+function quarterName(day) {
+  return day.slice(0, 4) + ' Q' + Math.ceil(+day.slice(5, 7) / 3);
+}
+
+function quarterKey(name) {
+  var m = /^\s*(\d{4})\s*Q([1-4])\s*$/i.exec(name);
+  return m ? +m[1] * 10 + +m[2] : 0;
+}
+
+/** Stops when a tab has dates but none of them can be read (say the date format changed). */
+function checkDates(rows, c, what) {
+  var filled = 0, read = 0;
+  rows.forEach(function (r) {
+    if (!cell(r, c)) return;
+    filled++;
+    if (parseDate(cell(r, c))) read++;
+  });
+  if (filled && !read) {
+    throw new Error(what + "'s dates can't be read (they should look like 11/3/26), so nothing was sent.");
+  }
 }
 
 /** The two most recent quarter tabs, like "2026 Q4" and "2026 Q3". */
 function quarterTabs(names) {
   return names
-    .map(function (n) { var m = /^\s*(\d{4})\s*Q([1-4])\s*$/i.exec(n); return m ? { name: n, key: +m[1] * 10 + +m[2] } : null; })
+    .map(function (n) { var k = quarterKey(n); return k ? { name: n, key: k } : null; })
     .filter(Boolean)
     .sort(function (a, b) { return b.key - a.key; })
     .slice(0, 2)
@@ -164,9 +211,9 @@ function cell(row, i) {
   return i >= 0 && i < row.length ? String(row[i]).trim() : '';
 }
 
-/** "10/27/26", "11/17/2026" or "Tue 11/3/26" → "2026-11-03"; anything else → "". */
+/** "10/27/26", "11/17/2026" or "Tue 11/3/26" -> "2026-11-03"; anything else -> "". */
 function parseDate(text) {
-  var m = /(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})(?!\d)/.exec(String(text));
+  var m = /(?:^|\D)(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})(?!\d)/.exec(String(text));
   var y, mo, d;
   if (m) {
     mo = +m[1]; d = +m[2]; y = +m[3]; if (y < 100) y += 2000;
@@ -180,7 +227,7 @@ function parseDate(text) {
   return y + '-' + pad2(mo) + '-' + pad2(d);
 }
 
-/** "6:30 PM", "6 pm", "18:30" or "18:30:00" → "6:30pm" / "6pm"; other text is kept. */
+/** "6:30 PM", "6 pm", "18:30" or "18:30:00" -> "6:30pm" / "6pm"; other text is kept. */
 function formatTime(text) {
   var t = String(text).trim();
   var m = /^(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s*m\.?$/i.exec(t);
@@ -194,18 +241,18 @@ function formatTime(text) {
   return t.slice(0, 40);
 }
 
-/** "Oelkers" → "the Oelkers'", "Farag's" → "the Farags'", "The Weeks" → "the Weeks'". */
+/** "Oelkers" -> "the Oelkers'", "Farag's" -> "the Farags'", "The Weeks" -> "the Weeks'". */
 function possessive(host) {
   var name = String(host).trim().replace(/^the\s+/i, '');
-  if (/['’]s$/i.test(name)) name = name.slice(0, -2) + 's';
-  else if (/s['’]$/i.test(name)) name = name.slice(0, -1);
+  if (/['\u2019]s$/i.test(name)) name = name.slice(0, -2) + 's';
+  else if (/s['\u2019]$/i.test(name)) name = name.slice(0, -1);
   if (!/s$/i.test(name)) name += 's';
   return 'the ' + name + "'";
 }
 
-/** "Fall Fest 2026!" → "fall-fest-2026"; accents are dropped. */
+/** "Fall Fest 2026!" -> "fall-fest-2026"; accents are dropped. */
 function slug(text) {
-  return String(text).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  return String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60).replace(/-+$/, '') || 'event';
 }
 
@@ -223,7 +270,8 @@ function readSettings_() {
   if (!url || !anon || !key) {
     throw new Error('Add SUPABASE_URL, SUPABASE_ANON_KEY and SYNC_KEY in Project Settings > Script properties.');
   }
-  if (!/^https:\/\/[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(url)) {
+  // Only a Supabase project address, so a typo can't send the key elsewhere.
+  if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url)) {
     throw new Error('SUPABASE_URL should look like https://abcd1234.supabase.co, with nothing after it.');
   }
   return { url: url, anon: anon, key: key };
@@ -251,6 +299,6 @@ function callSite_(settings, fn, body) {
 // Lets the tests load this file in Node. Apps Script ignores it.
 if (typeof module !== 'undefined') {
   module.exports = { buildSync: buildSync, quarterTabs: quarterTabs, findHeader: findHeader, parseDate: parseDate,
-                     formatTime: formatTime, possessive: possessive, slug: slug,
+                     formatTime: formatTime, possessive: possessive, slug: slug, quarterName: quarterName,
                      syncLifegroupSheet: syncLifegroupSheet, setUpSync: setUpSync, stopSync: stopSync };
 }

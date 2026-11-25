@@ -13,9 +13,16 @@ site every hour, the same way the app's sheet sync fills the app:
 
 Nights and events removed from the sheet disappear from the site. Past ones
 stay. A family removed from the sheet is removed from the site, unless
-prayers are filed under it; then it stays. If the script can't find a tab or
-a header row, it stops and sends nothing, so a renamed tab can't wipe the
-calendar. Google runs it, so it uses no Claude.
+prayers are filed under it or it was first added on the site; then it stays.
+Google runs it, so it uses no Claude.
+
+It's careful with mistakes in the sheet:
+- If a tab, a header row or the "Pray for" column is missing, or a tab's
+  dates can't be read (say the date format changed), it stops and sends
+  nothing. Google emails you, and the next run tries again.
+- If there's no tab for the current quarter yet (or it's named differently,
+  like "Q1 2027" instead of "2027 Q1"), it still adds and updates nights but
+  removes none, so a missing tab can't clear the calendar.
 
 Before you start: README steps 7 and 8, and the sync key from
 `docs/calendar-sync.md` step 1.
@@ -34,11 +41,12 @@ Before you start: README steps 7 and 8, and the sync key from
    left), scroll to **Script properties**, press **Add script property** and
    add these three, then press **Save script properties**:
    - `SUPABASE_URL`: the Project URL from Supabase (Project Settings, Data
-     API), like `https://abcd1234.supabase.co`
+     API), like `https://abcd1234.supabase.co`, with nothing after `.co`
    - `SUPABASE_ANON_KEY`: the project's public anon (or publishable) key, the
      same one the site uses
-   - `SYNC_KEY`: the sync key from `docs/calendar-sync.md` step 1. Paste it
-     here only, not in a chat or a note.
+   - `SYNC_KEY`: the key labeled `'sheet script'` from
+     `docs/calendar-sync.md` step 1. Paste it here only, not in a chat or a
+     note.
 4. **Turn it on.** Go back to the **Editor** (the `< >` on the left), pick
    **setUpSync** in the function list at the top, and press **Run**.
    - Google asks for permission the first time. Press **Review permissions**
@@ -57,22 +65,24 @@ a summary. To turn it off, pick **stopSync** and press **Run**.
 ## Keeping the key safe
 
 - The key sits in the script's settings. Anyone who can **edit** the sheet
-  can open the script and see it. Someone who has the key can change the
-  site's sheet events and sheet families, but can't read anything or touch
-  prayers. Only share edit access to the sheet with people you trust.
-- The script only sends the key to the site, over HTTPS. It never writes the
-  key or the sheet's contents to its log.
+  can open the script and see it. Someone who has the key could change the
+  site's sheet and church events and the families list (removing families
+  the sheet added that have no prayers), but can't read anything, touch
+  prayers, or remove a family that has prayers. Only share edit access to
+  the sheet with people you trust.
+- The script only sends the key to a `supabase.co` address, over HTTPS. It
+  never writes the key or the sheet's contents to its log.
 - If you think the key was seen by someone it shouldn't be: in Supabase run
-  `delete from private.sync_keys;`, make a new key (calendar-sync step 1),
-  and put it in `SYNC_KEY` here (and in the church routine's environment, if
-  you set that up).
+  `delete from private.sync_keys where label = 'sheet script';`, make a new
+  one (calendar-sync step 1), and put it in `SYNC_KEY` here.
 
 ## What it sends
 
 Two POSTs, with only the public key in the `apikey` header and the sync key
 in the body as `p_key`:
 
-- `rpc/sync_events` with `p_source: "sheet"`, `p_replace_from: <today>` and
-  the events (see `docs/calendar-sync.md` section 3).
+- `rpc/sync_events` with `p_source: "sheet"`, `p_replace_from: <today>`
+  (left out when this quarter's tab is missing) and the events (see
+  `docs/calendar-sync.md` section 3).
 - `rpc/sync_families` with `p_families`: `[{ "name", "husband", "wife",
   "pray_for" }, …]` in the sheet's order. An empty list is refused.

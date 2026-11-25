@@ -1,9 +1,10 @@
 # Calendar syncs
 
 The lifegroup Google Sheet and the church calendar are copied in by syncs.
-They write with a **sync key**, which can only add, change or remove sheet
-and church events and the sheet's families. It can't read anything, and it
-can't touch prayers, invites or group events.
+They write with a **sync key**. A key can add, change or remove sheet and
+church events, and update the families list from the sheet (removing only
+families the sheet itself added, and never one with prayers). It can't read
+anything, and it can't touch prayers, invites, members or group events.
 
 - **The sheet** is sent by a small script inside the Google Sheet, which
   Google runs every hour and which uses no Claude. Its steps are in
@@ -13,22 +14,27 @@ the key, so the key itself is only ever in one place: wherever the sync runs.
 
 Run README steps 6 and 7 first.
 
-## 1. Make a sync key (once)
+## 1. Make a sync key (one for each sync)
 
 In the Supabase SQL Editor, run this. It makes a random key, saves only its
-fingerprint, and shows the key once. Copy it straight into step 2; don't
+fingerprint, and shows the key once. Give each sync its own key by changing
+the label at the end of the third line: `'sheet script'` for the sheet,
+`'church routine'` for church events. Then one can be turned off without
+touching the other. Copy it straight into step 2; don't
 paste it into a chat, a note or a file in this repo. (For the sheet script,
 it goes in the script's settings instead; see `docs/sheet-sync.md`.)
 
 ```sql
 with k as (select replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '') as key)
 insert into private.sync_keys (key_hash, label)
-select private.hash_key(key), 'calendar sync' from k
+select private.hash_key(key), 'sheet script' from k
 returning (select key from k) as copy_this_key;
 ```
 
-To turn every sync key off (for example, if one leaks), run
-`delete from private.sync_keys;` and make a new one.
+To turn one key off (for example, if it leaks), run
+`delete from private.sync_keys where label = 'sheet script';` (or that
+key's label) and make a new one. `delete from private.sync_keys;` turns
+every key off.
 
 ## 2. Church events: let the routine reach Supabase, with the key kept secret
 
