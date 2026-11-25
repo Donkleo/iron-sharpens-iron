@@ -9,6 +9,11 @@ for everyone to reach, email over texts, no phone app for now.
 
 - [x] **Prayer core (first release):** email sign-in link with an invite list,
   This week, Lifegroup and Brothers prayers, I prayed, updates, answered.
+- [x] **Looks and works like the app:** a verse after each "I prayed", Pray
+  now (a few prayers at a time), "Pray again" when someone shares news on a
+  prayer you prayed for, similar prayers when answering, family and brother
+  chips, date tabs, search with mark-several-answered, and a sign-in code in
+  the email next to the link.
 
 ## Next
 
@@ -18,20 +23,16 @@ for everyone to reach, email over texts, no phone app for now.
 2. **Switch the group.** Share the site link; the current page stays as a
    backup for a few weeks.
 3. **Live refresh.** New prayers and "I prayed" show up without reloading.
-4. **Pray now.** Step through this week's prayers one at a time, with a verse
-   of encouragement after each "I prayed" (as on today's page).
-5. **Updates bring a prayer back.** When someone shares news on a prayer you
-   prayed for, mark it "Pray again" for you.
-6. **Similar prayers.** When answering, offer to mark the same family's
-   similar open prayers answered too.
-7. **Calendar.** Group and church events; point the "Sync lifegroup sheet" and
+4. **Partners and "Your brother".** The app's weekly partner family and
+   brother for each person; needs a small database change.
+5. **Calendar.** Group and church events; point the "Sync lifegroup sheet" and
    church event routines at the new database.
-8. **Sheet photo scanning.** A small server function that reads the paper
+6. **Sheet photo scanning.** A small server function that reads the paper
    prayer sheet with the Claude API (a few cents a photo). the group leader does the
    scanning.
-9. **Rooted Women.** The women's side on the same site and database, sharing
+7. **Rooted Women.** The women's side on the same site and database, sharing
    lifegroup prayers, so the paused prayer sync routine is no longer needed.
-10. **Email reminders.** Weekly summary and "not prayed for yet" nudges by
+8. **Email reminders.** Weekly summary and "not prayed for yet" nudges by
     email (free tier), not texts.
 
 ## Later, needs more thought
