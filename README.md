@@ -82,6 +82,14 @@ deploys to GitHub Pages.
 
    Sheet and church events arrive once the syncs are pointed at the site.
    `docs/calendar-sync.md` has the steps.
+8. **Families from the sheet:** run the next file the same way as step 1.
+   - Open the file as plain text:
+     https://raw.githubusercontent.com/Donkleo/iron-sharpens-iron/main/supabase/migrations/20261125220000_sheet_families.sql
+   - Select all of the text and copy it, then paste it into a new
+     **SQL Editor** query and press **Run**. It should say "Success. No rows
+     returned".
+
+   Then set up the Google Sheet script with `docs/sheet-sync.md`.
 
 The repo's Actions secrets `SUPABASE_URL` and `SUPABASE_ANON_KEY` are read at
 deploy time. Without them the site builds and shows a setup notice.
