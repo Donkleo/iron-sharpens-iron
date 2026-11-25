@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   prayerWeekStart, inThisWeek, weekFrom, thisWeek, latestByFamily, isCurrent, needsPrayer,
   prayersByRequest, iPrayedThisWeek, groupBy, matchesSearch, cleanFamilyName, esc, isEmail, ago,
+  upcomingEvents, eventsFor, dateRange, eventEnd, calendarLink, mapsLink, safeUrl, dateBlock,
 } from "../src/logic.js";
 
 // Wednesday Nov 25, 2026, noon local time.
@@ -182,5 +183,63 @@ describe("this week's numbers and news", () => {
   it("labels months, with the year when it differs", () => {
     expect(monthLabel("2026-11", now)).toBe("Nov");
     expect(monthLabel("2025-12", now)).toBe("Dec ’25");
+  });
+});
+
+describe("calendar", () => {
+  const ev = (o) => ({ id: o.title, hidden: false, source: "group", ...o });
+  const events = [
+    ev({ title: "Retreat", starts_on: "2026-11-24", ends_on: "2026-11-26" }), // started yesterday, still on
+    ev({ title: "Late breakfast", starts_on: "2026-11-28", time_text: "9:00 AM" }),
+    ev({ title: "Early breakfast", starts_on: "2026-11-28", time_text: "7:00 AM" }),
+    ev({ title: "Far off", starts_on: "2026-12-20" }),
+    ev({ title: "Last week", starts_on: "2026-11-18" }),
+    ev({ title: "Hidden", starts_on: "2026-11-27", hidden: true }),
+  ];
+
+  it("Coming up lists the next two weeks, soonest first, without hidden ones", () => {
+    expect(upcomingEvents(events, 14, now).map((e) => e.title)).toEqual(["Retreat", "Early breakfast", "Late breakfast"]);
+  });
+
+  it("splits the Calendar tab into upcoming, past and hidden", () => {
+    expect(eventsFor(events, "upcoming", now).map((e) => e.title)).toEqual(["Retreat", "Early breakfast", "Late breakfast", "Far off"]);
+    expect(eventsFor(events, "past", now).map((e) => e.title)).toEqual(["Last week"]);
+    expect(eventsFor(events, "hidden", now).map((e) => e.title)).toEqual(["Hidden"]);
+  });
+
+  it("sorts same-day events by clock time, not by the text", () => {
+    const day = [ev({ title: "Supper", starts_on: "2026-11-28", time_text: "6:30 PM" }), ev({ title: "Brunch", starts_on: "2026-11-28", time_text: "10:00 AM" }),
+      ev({ title: "Run", starts_on: "2026-11-28", time_text: "7:00am" }), ev({ title: "All day", starts_on: "2026-11-28" })];
+    expect(upcomingEvents(day, 14, now).map((e) => e.title)).toEqual(["All day", "Run", "Brunch", "Supper"]);
+  });
+
+  it("Coming up reaches the 14th day even across a clock change", () => {
+    const beforeDst = new Date(2026, 9, 30, 12); // Oct 30; clocks change on Nov 1 in the US
+    expect(upcomingEvents([ev({ title: "Two weeks out", starts_on: "2026-11-13" })], 14, beforeDst)).toHaveLength(1);
+  });
+
+  it("ignores an end day before the start", () => {
+    expect(eventEnd({ starts_on: "2026-11-28", ends_on: "2026-11-20" })).toBe("2026-11-28");
+  });
+
+  it("writes date ranges", () => {
+    expect(dateRange({ starts_on: "2026-12-04", ends_on: "2026-12-06" })).toMatch(/Dec 4.6/);
+    expect(dateRange({ starts_on: "2026-11-30", ends_on: "2026-12-02" })).toMatch(/Nov 30 . Dec 2/);
+    expect(dateRange({ starts_on: "2026-11-28" })).toMatch(/Sat/);
+    expect(dateBlock("2026-11-28")).toMatchObject({ day: 28 });
+  });
+
+  it("fills in a Google Calendar event, all day, through the last day", () => {
+    const u = new URL(calendarLink({ title: "Retreat", starts_on: "2026-12-04", ends_on: "2026-12-06", time_text: "6 PM", location: "Camp" }));
+    expect(u.searchParams.get("dates")).toBe("20261204/20261207");
+    expect(u.searchParams.get("details")).toBe("Time: 6 PM");
+    expect(u.searchParams.get("location")).toBe("Camp");
+  });
+
+  it("only links to https pages", () => {
+    expect(safeUrl("javascript:alert(1)")).toBe("");
+    expect(safeUrl("http://example.org")).toBe("");
+    expect(safeUrl("https://example.org")).toBe("https://example.org");
+    expect(mapsLink("12 Oak St & 2nd")).toContain("12%20Oak%20St%20%26%202nd");
   });
 });

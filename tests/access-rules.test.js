@@ -59,7 +59,7 @@ describe("sign-up", () => {
 });
 
 describe("anon key", () => {
-  const tables = ["invites", "members", "families", "requests", "request_updates", "prayers"];
+  const tables = ["invites", "members", "families", "requests", "request_updates", "prayers", "events"];
   for (const t of tables) {
     it(`cannot read ${t}`, async () => {
       await expect(as("anon", `select * from public.${t}`)).rejects.toThrow(/permission denied/);
@@ -276,6 +276,126 @@ describe("admins", () => {
     await db.query("delete from auth.users where id = $1", [ids.early]);
     const r = await db.query("select for_member, for_name from public.requests where for_name = 'Early'");
     expect(r.rows).toEqual([{ for_member: null, for_name: "Early" }]);
+  });
+});
+
+describe("calendar", () => {
+  let groupEvent, churchEvent;
+  const KEY = "test-sync-key-0123456789abcdef";
+
+  beforeAll(async () => {
+    await db.query("insert into private.sync_keys (key_hash) values (private.hash_key($1))", [KEY]);
+  });
+
+  it("members add a group event, marked as theirs", async () => {
+    const r = await as("brother",
+      "insert into public.events (title, starts_on, time_text, location) values ('Breakfast', '2026-11-28', '7:00 AM', 'Diner') returning id, source, created_by, hidden");
+    groupEvent = r.rows[0].id;
+    expect(r.rows[0]).toMatchObject({ source: "group", created_by: ids.brother, hidden: false });
+  });
+
+  it("members can't add church or sheet events, or hide them", async () => {
+    await expect(as("brother", "insert into public.events (title, starts_on, source) values ('x', '2026-11-28', 'church')"))
+      .rejects.toThrow(/permission denied/);
+    await expect(as("brother", "insert into public.events (title, starts_on, hidden) values ('x', '2026-11-28', true)"))
+      .rejects.toThrow(/permission denied/);
+    await expect(as("brother", "insert into public.events (title, starts_on, created_by) values ('x', '2026-11-28', $1)", [ids.admin]))
+      .rejects.toThrow(/permission denied/);
+  });
+
+  it("people whose invite was removed can't see the calendar", async () => {
+    const r = await as("removed", "select id from public.events");
+    expect(r.rows).toEqual([]);
+  });
+
+  it("the sync key adds and updates sheet and church events", async () => {
+    const events = [
+      { id: "c1", title: "Thanksgiving service", date: "2026-11-26", time: "6:00 PM", url: "https://example.org/thanks" },
+      { id: "c2", title: "Men's retreat", date: "2026-12-04", end_date: "2026-12-06" },
+    ];
+    const r = await as("anon", "select public.sync_events($1, 'church', $2::jsonb) as n", [KEY, JSON.stringify(events)]);
+    expect(r.rows[0].n).toBe(2);
+    const rows = (await as("brother", "select id, external_id, title, ends_on::text, time_text, url, created_by from public.events where source = 'church' order by external_id")).rows;
+    expect(rows.map((x) => x.title)).toEqual(["Thanksgiving service", "Men's retreat"]);
+    expect(rows[1].ends_on).toBe("2026-12-06");
+    expect(rows[0].created_by).toBeNull();
+    churchEvent = rows[0].id;
+    // Running again updates in place.
+    events[0].title = "Thanksgiving Eve service";
+    await as("anon", "select public.sync_events($1, 'church', $2::jsonb)", [KEY, JSON.stringify(events)]);
+    const again = await db.query("select count(*)::int as n, min(title) as t from public.events where source = 'church' and external_id = 'c1'");
+    expect(again.rows[0]).toEqual({ n: 1, t: "Thanksgiving Eve service" });
+  });
+
+  it("refuses a wrong or missing sync key, and group events", async () => {
+    await expect(as("anon", "select public.sync_events('wrong-key-wrong-key-wrong-key', 'church', '[]'::jsonb)")).rejects.toThrow(/Unknown sync key/);
+    await expect(as("anon", "select public.sync_events(null, 'church', '[]'::jsonb)")).rejects.toThrow(/Unknown sync key/);
+    await expect(as("anon", "select public.sync_events($1, 'group', '[]'::jsonb)", [KEY])).rejects.toThrow(/sheet or church/);
+    await expect(as("anon", "select public.sync_events($1, 'sheet', '[{\"title\":\"no id\",\"date\":\"2026-11-30\"}]'::jsonb)", [KEY]))
+      .rejects.toThrow(/needs an id, a title and a date/);
+    await expect(as("anon", "select public.sync_events($1, 'sheet', '[{\"id\":\"s9\",\"title\":\"no date\"}]'::jsonb)", [KEY]))
+      .rejects.toThrow(/needs an id, a title and a date/);
+  });
+
+  it("the sync key can't read anything or reach the key table", async () => {
+    await expect(as("anon", "select * from public.events")).rejects.toThrow(/permission denied/);
+    await expect(as("anon", "select * from private.sync_keys")).rejects.toThrow(/permission denied/);
+    await expect(as("brother", "select * from private.sync_keys")).rejects.toThrow(/permission denied/);
+  });
+
+  it("only admins hide church events, and a sync keeps them hidden", async () => {
+    await as("brother", "update public.events set hidden = true where id = $1", [churchEvent]);
+    expect((await db.query("select hidden from public.events where id = $1", [churchEvent])).rows[0].hidden).toBe(false);
+    await expect(as("brother", "update public.events set title = 'x' where id = $1", [churchEvent])).rejects.toThrow(/permission denied/);
+    await as("admin", "update public.events set hidden = true where id = $1", [churchEvent]);
+    await as("anon", "select public.sync_events($1, 'church', $2::jsonb)", [KEY, JSON.stringify([{ id: "c1", title: "Thanksgiving Eve service", date: "2026-11-26" }])]);
+    expect((await db.query("select hidden from public.events where id = $1", [churchEvent])).rows[0].hidden).toBe(true);
+    // Group events aren't hidden, they're deleted.
+    await as("admin", "update public.events set hidden = true where id = $1", [groupEvent]);
+    expect((await db.query("select hidden from public.events where id = $1", [groupEvent])).rows[0].hidden).toBe(false);
+  });
+
+  it("a sync with a start day removes that source's nights no longer listed", async () => {
+    const sheet = [{ id: "s1", title: "Bible study", date: "2026-11-30", address: "12 Oak St" }, { id: "s2", title: "Hangout", date: "2026-12-07", kind: "open" }];
+    await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01')", [KEY, JSON.stringify(sheet)]);
+    await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01')", [KEY, JSON.stringify(sheet.slice(0, 1))]);
+    const r = await db.query("select external_id from public.events where source = 'sheet'");
+    expect(r.rows).toEqual([{ external_id: "s1" }]);
+    // Church events were left alone.
+    expect((await db.query("select count(*)::int as n from public.events where source = 'church'")).rows[0].n).toBe(2);
+  });
+
+  it("a repeated item or a plain http link doesn't stop the sync", async () => {
+    const sheet = [
+      { id: "s1", title: "Bible study", date: "2026-11-30", url: "http://example.org/old" },
+      { id: "s1", title: "Bible study at the Hills", date: "2026-11-30", url: "HTTPS://example.org/a" },
+    ];
+    const r = await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01') as n", [KEY, JSON.stringify(sheet)]);
+    expect(r.rows[0].n).toBe(1);
+    const row = (await db.query("select title, url from public.events where source = 'sheet'")).rows;
+    expect(row).toEqual([{ title: "Bible study at the Hills", url: "https://example.org/a" }]);
+    await as("anon", "select public.sync_events($1, 'sheet', $2::jsonb, '2026-11-01')", [KEY, JSON.stringify(sheet.slice(0, 1))]);
+    expect((await db.query("select url from public.events where source = 'sheet'")).rows[0].url).toBeNull();
+  });
+
+  it("sheet events can't be hidden from the site, even by an admin", async () => {
+    await as("admin", "update public.events set hidden = true where source = 'sheet'");
+    expect((await db.query("select bool_or(hidden) as h from public.events where source = 'sheet'")).rows[0].h).toBe(false);
+  });
+
+  it("members can't delete church or sheet events", async () => {
+    await as("brother", "delete from public.events where source <> 'group'");
+    await as("admin", "delete from public.events where source <> 'group'");
+    expect((await db.query("select count(*)::int as n from public.events where source <> 'group'")).rows[0].n).toBe(3);
+  });
+
+  it("group events are deleted by whoever added them, or an admin", async () => {
+    const other = (await as("admin", "insert into public.events (title, starts_on) values ('Workday', '2026-12-12') returning id")).rows[0].id;
+    await as("brother", "delete from public.events where id = $1", [other]);
+    expect((await db.query("select count(*)::int as n from public.events where id = $1", [other])).rows[0].n).toBe(1);
+    await as("admin", "delete from public.events where id = $1", [other]);
+    await as("brother", "delete from public.events where id = $1", [groupEvent]);
+    expect((await db.query("select count(*)::int as n from public.events where source = 'group'")).rows[0].n).toBe(0);
   });
 });
 

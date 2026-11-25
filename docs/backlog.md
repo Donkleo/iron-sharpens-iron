@@ -14,6 +14,10 @@ for everyone to reach, email over texts, no phone app for now.
   prayer you prayed for, similar prayers when answering, family and brother
   chips, date tabs, search with mark-several-answered, and a sign-in code in
   the email next to the link.
+- [x] **Calendar:** a Calendar tab (upcoming, past, and hidden for admins),
+  group events anyone can add, sheet events with address and Maps, "Add to
+  my calendar", and Coming up on This week. The invite list moved to a
+  button at the bottom of the page so the tabs match the app.
 
 ## Next
 
@@ -25,8 +29,8 @@ for everyone to reach, email over texts, no phone app for now.
 3. **Live refresh.** New prayers and "I prayed" show up without reloading.
 4. **Partners and "Your brother".** The app's weekly partner family and
    brother for each person; needs a small database change.
-5. **Calendar.** Group and church events; point the "Sync lifegroup sheet" and
-   church event routines at the new database.
+5. **Calendar syncs.** Point the "Sync lifegroup sheet" and church event
+   routines at the site (`docs/calendar-sync.md`), after the group leader's yes.
 6. **Sheet photo scanning.** A small server function that reads the paper
    prayer sheet with the Claude API (a few cents a photo). the group leader does the
    scanning.

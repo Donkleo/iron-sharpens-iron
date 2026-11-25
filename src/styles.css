@@ -159,6 +159,26 @@ details.more > .form { border: 0; border-top: 1px solid var(--line); border-radi
 .remember-count { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 4px 0 2px; }
 .month { font-family: var(--display); font-weight: 600; font-size: 1rem; padding: 14px 0 4px; color: var(--muted); }
 
+/* Calendar */
+h3.month { margin: 0; }
+.seg { display: inline-flex; border: 1.5px solid var(--ink); border-radius: 6px; overflow: hidden; flex: none; }
+.seg button { appearance: none; border: 0; background: none; padding: 6px 12px; font: 600 0.85rem var(--body); color: var(--ink); cursor: pointer; }
+.seg button + button { border-left: 1.5px solid var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.legend { line-height: 1.9; }
+.ev { display: grid; grid-template-columns: 52px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.ev-date { text-align: center; border: 1.5px solid var(--ink); border-radius: 6px; padding: 3px 0 4px; align-self: start; }
+.ev-date .dow { font: 500 0.62rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); display: block; }
+.ev-date .d { font: 700 1.35rem var(--display); line-height: 1; font-variant-numeric: tabular-nums; }
+.ev.church .ev-date { border-color: var(--steel); }
+.ev.sheet .ev-date { border-color: var(--moss); }
+.ev-body { min-width: 0; display: grid; gap: 2px; }
+.ev-title { font-weight: 700; overflow-wrap: anywhere; }
+.ev-notes { overflow-wrap: anywhere; white-space: pre-wrap; }
+.ev-body .actions { margin-top: 2px; }
+.ev-details { display: grid; gap: 8px; margin-top: 4px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+.ev-details .addr { font-weight: 600; overflow-wrap: anywhere; user-select: all; }
+
 /* Lifegroup and Brothers: chips, groups, date tabs */
 .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
 .chip { appearance: none; flex: none; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); font: 600 0.88rem var(--body); padding: 6px 12px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -221,6 +241,7 @@ body.noscroll { overflow: hidden; }
   .chip { min-height: 38px; }
   .chip.small-chip { min-height: 34px; }
   .tab { min-height: 46px; }
+  .seg button { min-height: 38px; }
   .checkline { padding: 4px 0; }
 }
 @media (max-width: 400px) {

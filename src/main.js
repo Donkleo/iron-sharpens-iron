@@ -7,6 +7,7 @@ import {
   thisWeek, matchesSearch, inThisWeek, weekIsSheet, DAY,
   encourager, latestUpdate, updatedForMe, prayedCurrent, undoIds, similarOpen, ownerKey,
   weekPulse, weekNews, monthLabel, longMonth,
+  upcomingEvents, eventsFor, dateRange, dateBlock, eventMonth, calendarLink, mapsLink, safeUrl,
 } from "./logic.js";
 
 const $ = (s) => document.querySelector(s);
@@ -43,6 +44,9 @@ const state = {
   newsBaseline: undefined, // when news was last seen, frozen while the page is open
   prayNow: null, // { ids, i, prayed, skipped, verse }
   ready: false, // true once we know whether someone is signed in
+  when: "upcoming", // Calendar: "upcoming", "past" or "hidden" (admins)
+  openEvent: null, // the sheet event whose details are showing
+  eventDraft: null, // what was typed in Add a group event, kept if saving fails
 };
 
 const nextVerse = encourager();
@@ -152,12 +156,14 @@ function render() {
     return;
   }
   derive();
-  const views = { week: viewWeek, lifegroup: viewLifegroup, brothers: viewBrothers };
+  const views = { week: viewWeek, lifegroup: viewLifegroup, brothers: viewBrothers, calendar: viewCalendar };
   if (state.admin) views.group = viewGroup;
   const view = (views[state.tab] || viewWeek)();
   const tabId = state.tab in views ? state.tab : "week";
   const foot = tabId === "week" ? "" : footer();
-  app.innerHTML = shell(tabs() + `<section class="view" role="tabpanel" id="panel-${tabId}" aria-labelledby="tab-${tabId}">${view}</section>${foot}`) + prayNowView();
+  // The invite list opens from the footer, so it has no tab of its own.
+  const panel = tabId === "group" ? `aria-label="Invite list" tabindex="-1"` : `role="tabpanel" aria-labelledby="tab-${tabId}"`;
+  app.innerHTML = shell(tabs() + `<section class="view" id="panel-${tabId}" ${panel}>${view}</section>${foot}`) + prayNowView();
   document.body.classList.toggle("noscroll", !!state.prayNow);
   if (state.prayNow && state.prayNow.focus !== state.prayNow.i) {
     state.prayNow.focus = state.prayNow.i;
@@ -178,13 +184,12 @@ function shell(inner) {
 function whoAmI() {
   const me = state.data?.members.find((m) => m.id === myId());
   return `<div class="whoami"><span class="meta">You’re ${esc(me?.display_name || state.session?.user?.email || "")}</span>
-    <button class="btn quiet small" type="button" data-act="sign-out">Sign out</button></div>`;
+    <span class="actions">${state.admin ? `<button class="btn quiet small" type="button" data-act="tab" data-tab="group"${state.tab === "group" ? ` aria-current="page"` : ""}>Invite list</button>` : ""}<button class="btn quiet small" type="button" data-act="sign-out">Sign out</button></span></div>`;
 }
 const footer = () => `<footer class="foot">${whoAmI()}</footer>`;
 
 function tabs() {
-  const list = [["week", "This week"], ["lifegroup", "Lifegroup"], ["brothers", "Brothers"]];
-  if (state.admin) list.push(["group", "Invites"]);
+  const list = [["week", "This week"], ["lifegroup", "Lifegroup"], ["brothers", "Brothers"], ["calendar", "Calendar"]];
   const wk = thisWeek(state.data.requests, labelOf);
   const notYet = wk.lifegroup.concat(wk.brothers).filter((r) => !weekCount(r)).length;
   return `<nav class="tabs" role="tablist" aria-label="Sections">${list.map(([id, label]) => `
@@ -378,7 +383,7 @@ function viewWeek() {
     + drop("lg", "Lifegroup prayers", dropMeta(wk.lifegroup), source + (wk.lifegroup.length ? weekList(wk.lifegroup) : `<div class="empty">No lifegroup requests this week yet. Add them on the <b>Lifegroup</b> tab.</div>`))
     + drop("peer", "Brothers prayers", dropMeta(wk.brothers), wk.brothers.length ? weekList(wk.brothers) : `<div class="empty">No requests yet. Add them on the <b>Brothers</b> tab.</div>`)
     + drop("news", "Updates and answered prayers", newsMeta, newsBody)
-    + `</div>` + rememberWall();
+    + `</div>` + comingUp() + rememberWall();
 }
 
 // Your own view: prayers you prayed for this week drop below the rest and
@@ -713,6 +718,96 @@ function viewBrothers() {
     </div>`;
 }
 
+// ----- Calendar -----
+
+// The next two weeks, on This week.
+function comingUp() {
+  if (!state.data.calendarReady) return "";
+  const soon = upcomingEvents(state.data.events, 14);
+  return `<div class="sec">
+      <div class="sec-head"><h2>Coming up</h2><span class="eyebrow">next 14 days</span></div>
+      ${soon.length ? `<div>${soon.map(eventRow).join("")}</div>` : `<div class="empty">Nothing on the calendar for the next two weeks.</div>`}
+    </div>`;
+}
+
+function eventRow(e) {
+  const church = e.source === "church";
+  const sheet = e.source === "sheet"; // Bible studies and hangouts from the lifegroup Google Sheet
+  const open = state.openEvent === e.id;
+  const key = "ev:" + e.id;
+  const d = dateBlock(e.starts_on);
+  const mayRemove = church ? state.admin : !sheet && (state.admin || e.created_by === myId());
+  const removeBtns = e.hidden
+    ? (state.admin ? `<button class="btn small" type="button" data-act="ev-unhide" data-id="${esc(e.id)}">Unhide</button>` : "")
+    : !mayRemove ? ""
+    : state.confirm === key
+      ? `<span class="meta">${church ? "Hide this for everyone?" : "Delete this event for everyone?"}</span><button class="btn danger small" type="button" data-act="${church ? "ev-hide" : "ev-del"}" data-id="${esc(e.id)}">${church ? "Hide" : "Delete"}</button><button class="btn quiet small" type="button" data-act="close">Keep</button>`
+      : `<button class="btn quiet small" type="button" data-act="confirm" data-id="${esc(key)}">${church ? "Hide" : "Delete"}</button>`;
+  const pill = church ? ` <span class="pill steel">Church</span>` : sheet ? ` <span class="pill moss">Lifegroup</span>` : "";
+  const addLink = `<a class="btn quiet small" href="${esc(calendarLink(e))}" target="_blank" rel="noopener">Add to my calendar</a>`;
+  const url = safeUrl(e.url);
+  const details = sheet && open ? `<div class="ev-details" id="evd-${esc(e.id)}">
+      ${e.address ? `<div><span class="sub">Address</span><div class="addr">${esc(e.address)}</div></div>`
+        : e.kind === "open" ? `<span class="meta">No host yet. Sign up in the Google Sheet to host this week.</span>` : `<span class="meta">No address listed in the sheet.</span>`}
+      ${e.notes ? `<div class="meta">${esc(e.notes)}</div>` : ""}
+      <div class="actions">
+        ${e.address ? `<a class="btn small" href="${esc(mapsLink(e.address))}" target="_blank" rel="noopener">Open in Maps</a>` : ""}
+        ${addLink}
+      </div>
+      <span class="meta">From the lifegroup Google Sheet. To change it, edit the sheet.</span>
+    </div>` : "";
+  return `<div class="ev${church ? " church" : ""}${sheet ? " sheet" : ""}">
+    <div class="ev-date" aria-hidden="true"><span class="dow">${esc(d.dow)}</span><span class="d">${esc(d.day)}</span></div>
+    <div class="ev-body">
+      <span class="ev-title">${esc(e.title)}${pill}</span>
+      <span class="meta">${[dateRange(e), e.time_text, e.location].filter(Boolean).map(esc).join(" · ")}</span>
+      ${e.notes && !sheet ? `<span class="meta ev-notes">${esc(e.notes)}</span>` : ""}
+      ${sheet
+        ? `<div class="actions"><button class="btn quiet small" type="button" data-act="ev-details" data-id="${esc(e.id)}" aria-expanded="${open}"${open ? ` aria-controls="evd-${esc(e.id)}"` : ""}>${open ? "Hide details" : "Details"}</button></div>${details}`
+        : `<div class="actions">${addLink}${url ? `<a class="btn quiet small" href="${esc(url)}" target="_blank" rel="noopener">Details</a>` : ""}${removeBtns}</div>`}
+    </div>
+  </div>`;
+}
+
+function viewCalendar() {
+  if (!state.data.calendarReady) {
+    return `<div class="card"><h2>The calendar is almost ready</h2>
+      <p class="lede">${state.admin ? "It needs its one-time database step. The steps are in the README, step 6." : "The group leader still has one setup step to do. Check back soon."}</p></div>`;
+  }
+  if (state.when === "hidden" && !state.admin) state.when = "upcoming";
+  const evs = eventsFor(state.data.events, state.when);
+  const hiddenCount = state.data.events.filter((e) => e.hidden).length;
+  const seg = [["upcoming", "Upcoming"], ["past", "Past"], ...(state.admin ? [["hidden", hiddenCount ? `Hidden (${hiddenCount})` : "Hidden"]] : [])];
+  let list = "", month = "";
+  for (const e of evs) {
+    const m = eventMonth(e.starts_on);
+    if (m !== month) { list += `<h3 class="month">${esc(m)}</h3>`; month = m; }
+    list += eventRow(e);
+  }
+  const draft = state.eventDraft || {};
+  return `<details class="more"${state.eventDraft ? " open" : ""}>
+      <summary>Add a group event</summary>
+      <form class="form" data-form="event" autocomplete="off">
+        <label class="field">What<input type="text" name="title" required maxlength="200" value="${esc(draft.title)}" placeholder="Saturday breakfast, workday at Mike's…"></label>
+        <div class="form-row">
+          <label class="field">Date<input type="date" name="starts_on" required value="${esc(draft.starts_on)}"></label>
+          <label class="field">Time<input type="text" name="time_text" maxlength="40" value="${esc(draft.time_text)}" placeholder="7:00 AM"></label>
+        </div>
+        <label class="field">Where<input type="text" name="location" maxlength="200" value="${esc(draft.location)}" placeholder="Optional"></label>
+        <div class="actions"><button class="btn primary" type="submit">Add event</button></div>
+      </form>
+    </details>
+    <div class="sec">
+      <div class="toolbar">
+        <h2 class="sr">Events</h2>
+        <div class="seg" role="group" aria-label="Show">${seg.map(([k, label]) => `<button type="button" data-act="when" data-when="${k}" data-id="${k}" aria-pressed="${state.when === k}">${esc(label)}</button>`).join("")}</div>
+        <span class="meta legend"><span class="pill moss">Lifegroup</span> from the group's sheet · <span class="pill steel">Church</span> from the church calendar</span>
+      </div>
+      ${evs.length ? `<div>${list}</div>` : `<div class="empty">${state.when === "upcoming" ? "No upcoming events. Add a group event above."
+        : state.when === "hidden" ? "No hidden events. Church events you hide show up here, so you can bring them back." : "No past events."}</div>`}
+    </div>`;
+}
+
 // ----- Invites (admins only) -----
 
 function viewGroup() {
@@ -777,7 +872,9 @@ app.addEventListener("click", async (e) => {
 
 async function handleClick(b, id, what) {
   switch (what) {
-    case "tab": state.tab = b.dataset.tab; state.form = null; state.confirm = null; state.picked.clear(); render(); window.scrollTo(0, 0); break;
+    case "tab": state.tab = b.dataset.tab; state.form = null; state.confirm = null; state.picked.clear(); render(); window.scrollTo(0, 0);
+      if (state.tab === "group") app.querySelector("#panel-group")?.focus({ preventScroll: true });
+      break;
     case "sign-out": await supabase.auth.signOut(); break;
     case "retry": await refresh(); break;
     case "open-update": state.form = { kind: "update", id, ctx: b.dataset.ctx }; state.confirm = null; render(); focusForm(); break;
@@ -799,6 +896,11 @@ async function handleClick(b, id, what) {
       break;
     }
     case "remember-toggle": state.showAllAnswered = !state.showAllAnswered; render(); break;
+    case "when": state.when = b.dataset.when; state.confirm = null; render(); break;
+    case "ev-details": state.openEvent = state.openEvent === id ? null : id; render(); break;
+    case "ev-del": state.confirm = null; await act(() => api.deleteEvent(id), "Event deleted."); break;
+    case "ev-hide": state.confirm = null; await act(() => api.setEventHidden(id, true), "Hidden. Find it under Hidden to bring it back."); break;
+    case "ev-unhide": await act(() => api.setEventHidden(id, false), "Back on the group calendar."); break;
     case "pick-all": {
       const open = state.data.requests.filter((r) => r.list === b.dataset.list && isActive(r) && matchesSearch(r, state.search[b.dataset.list], labelOf, updatesFor));
       state.picked = state.picked.size === open.length ? new Set() : new Set(open.map((r) => r.id));
@@ -1010,6 +1112,14 @@ app.addEventListener("submit", async (e) => {
         if (ok) { state.open.add("brothers:" + (v.for ? "m:" + v.for : "n:" + normalize(forName))); render(); }
         break;
       }
+      case "event": {
+        const title = String(v.title || "").trim();
+        if (!title || !v.starts_on) { toast("Add what it is and the date."); break; }
+        state.eventDraft = { title, starts_on: v.starts_on, time_text: String(v.time_text || "").trim(), location: String(v.location || "").trim() };
+        const fields = { title, starts_on: v.starts_on, time_text: state.eventDraft.time_text || null, location: state.eventDraft.location || null };
+        if (await act(() => api.addEvent(fields), "Event added.")) { state.eventDraft = null; render(); }
+        break;
+      }
       case "invite": {
         if (!isEmail(v.email)) { toast("That email doesn't look right."); break; }
         await act(() => api.addInvite(v.email, v.name), "Added. They can sign in with that email now.");
@@ -1058,7 +1168,8 @@ if (!configured) {
     state.ready = true;
     if (!session) {
       Object.assign(state, { member: null, data: null, admin: false, invites: [], tab: "week", form: null, confirm: null, prayNow: null, family: "all", man: "all",
-        search: { lifegroup: "", brothers: "" }, famDate: {}, showAllAnswered: false, bulkNote: "" });
+        search: { lifegroup: "", brothers: "" }, famDate: {}, showAllAnswered: false, bulkNote: "",
+        when: "upcoming", openEvent: null, eventDraft: null });
       state.open.clear(); state.picked.clear();
       document.body.classList.remove("noscroll");
       render();
