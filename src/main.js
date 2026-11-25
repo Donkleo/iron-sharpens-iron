@@ -38,6 +38,7 @@ const state = {
   man: "all", // Brothers chip: "all", "answered" or a person key
   famDate: {}, // date tab picked inside each family
   picked: new Set(), // search results picked to mark answered together
+  bulkNote: "", // the note typed for them
   showAllAnswered: false,
   newsBaseline: undefined, // when news was last seen, frozen while the page is open
   prayNow: null, // { ids, i, prayed, skipped, verse }
@@ -51,8 +52,8 @@ const nextVerse = encourager();
 let toastTimer;
 function toast(msg, ms = 3500) {
   const t = $("#toast");
-  t.textContent = msg;
   t.hidden = false;
+  t.textContent = msg;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, ms);
 }
@@ -187,7 +188,7 @@ function tabs() {
   const wk = thisWeek(state.data.requests, labelOf);
   const notYet = wk.lifegroup.concat(wk.brothers).filter((r) => !weekCount(r)).length;
   return `<nav class="tabs" role="tablist" aria-label="Sections">${list.map(([id, label]) => `
-    <button class="tab" role="tab" type="button" id="tab-${id}" data-act="tab" data-tab="${id}" aria-selected="${state.tab === id}" aria-controls="panel-${id}">
+    <button class="tab" role="tab" type="button" id="tab-${id}" data-act="tab" data-tab="${id}" aria-selected="${state.tab === id}">
       ${esc(label)}${id === "week" && notYet ? ` <span class="count" title="${notYet} not prayed for yet this week"><span class="sr">, </span>${notYet}<span class="sr"> not prayed for yet</span></span>` : ""}
     </button>`).join("")}</nav>`;
 }
@@ -358,7 +359,12 @@ function viewWeek() {
   const news = weekNews(state.data.requests, updatesFor);
   const seen = stored.get("news-seen", null);
   const isNew = (n, since) => n.by !== myId() && (!since || String(n.at) > since);
-  const fresh = news.filter((n) => isNew(n, seen)).length;
+  if (state.drops.has("news")) {
+    // The section is open, so you're seeing the news now.
+    if (state.newsBaseline === undefined) state.newsBaseline = seen;
+    stored.set("news-seen", new Date().toISOString());
+  }
+  const fresh = state.drops.has("news") ? 0 : news.filter((n) => isNew(n, seen)).length;
   const mark = state.newsBaseline !== undefined ? state.newsBaseline : seen;
   const nAns = news.filter((n) => n.kind === "answer").length, nUp = news.length - nAns;
   const newsMeta = (fresh ? `<span class="pill ember">${fresh} new</span> ` : "")
@@ -462,7 +468,7 @@ function prayNowView() {
   } else {
     const r = state.data.requests.find((x) => x.id === pn.ids[pn.i]);
     const u = r && latestUpdate(updatesFor(r));
-    inner = !r ? `<p class="meta">This prayer was removed.</p><div class="pn-actions"><button class="btn primary" type="button" data-act="pn-skip" data-autofocus>Next</button></div>`
+    inner = !r ? `<h2 class="pn-who" id="pn-title">This prayer was removed.</h2><div class="pn-actions"><button class="btn primary" type="button" data-act="pn-skip" data-autofocus>Next</button></div>`
       : `<div class="pn-step">${pn.i + 1} of ${pn.ids.length}</div>
       <h2 class="pn-who" id="pn-title">${esc(labelOf(r))}${isUpdated(r) ? ` <span class="pill steel">Updated</span>` : ""}</h2>
       <div class="pn-text">${esc(r.body)}</div>
@@ -490,7 +496,7 @@ function searchResults(which) {
       ${open.length ? `<button class="btn quiet small" type="button" data-act="pick-all" data-list="${which}">${n === open.length ? "Clear selection" : "Select all open"}</button>` : ""}</div>
     ${n ? `<form class="bulk" data-form="bulk">
       <span class="sub">${n} selected</span>
-      <input type="text" name="note" placeholder="How did God answer?" aria-label="How God answered" maxlength="2000">
+      <input type="text" name="note" value="${esc(state.bulkNote)}" data-bulknote placeholder="How did God answer?" aria-label="How God answered" maxlength="2000">
       <div class="actions"><button class="btn primary small" type="submit">Mark ${n} answered</button><button class="btn quiet small" type="button" data-act="pick-clear">Clear</button></div>
     </form>` : ""}
     <div>${hits.map((r) => {
@@ -745,6 +751,13 @@ function prayedMessage(id) {
   return coveredNow ? "\u{1F64C} That covers every request this week. Thank you for praying!" : "\u{1F64F} " + nextVerse();
 }
 
+// The page redraws after each change, so put focus back where it was.
+function refocus(act, id) {
+  if (document.activeElement && document.activeElement !== document.body && document.activeElement.isConnected) return;
+  const sel = id ? `[data-act="${act}"][data-id="${CSS.escape(id)}"]` : `[data-act="${act}"]`;
+  (app.querySelector(sel) || app.querySelector('.tab[aria-selected="true"]'))?.focus();
+}
+
 app.addEventListener("click", async (e) => {
   const fd = e.target.closest("[data-famdate]");
   if (fd) { const [k, d] = fd.dataset.famdate.split("|"); state.famDate[k] = d; render(); return; }
@@ -756,7 +769,14 @@ app.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]");
   if (!b || b.tagName === "INPUT") return;
   const id = b.dataset.id;
-  switch (b.dataset.act) {
+  const what = b.dataset.act;
+  try { await handleClick(b, id, what); } finally {
+    if (!what.startsWith("pn-") && !["tab", "sign-out", "open-update", "open-answer", "add-open"].includes(what)) refocus(what, id);
+  }
+});
+
+async function handleClick(b, id, what) {
+  switch (what) {
     case "tab": state.tab = b.dataset.tab; state.form = null; state.confirm = null; state.picked.clear(); render(); window.scrollTo(0, 0); break;
     case "sign-out": await supabase.auth.signOut(); break;
     case "retry": await refresh(); break;
@@ -795,8 +815,13 @@ app.addEventListener("click", async (e) => {
       if (!pn || b.disabled) break;
       b.disabled = true;
       const rid = pn.ids[pn.i];
-      if (await act(() => api.markPrayed(rid))) pn.prayed++;
-      if (state.prayNow === pn) { pn.i++; render(); }
+      const ok = await act(() => api.markPrayed(rid));
+      if (ok) pn.prayed++;
+      if (state.prayNow === pn) {
+        if (ok) pn.i++;
+        render();
+        if (!ok) app.querySelector('.pn-card [data-act="pn-pray"]')?.focus();
+      }
       break;
     }
     case "prayed": {
@@ -817,7 +842,7 @@ app.addEventListener("click", async (e) => {
     case "resend": b.disabled = true; await sendCode(state.sent); if (b.isConnected) b.disabled = false; break;
     case "other-email": state.sent = null; render(); break;
   }
-});
+}
 
 // Remember which groups and This week sections are open.
 app.addEventListener("toggle", (e) => {
@@ -879,6 +904,7 @@ app.addEventListener("change", (e) => {
 
 let searchTimer;
 app.addEventListener("input", (e) => {
+  if (e.target.matches("[data-bulknote]")) { state.bulkNote = e.target.value; return; }
   const which = e.target.dataset.search;
   if (!which) return;
   state.search[which] = e.target.value;
@@ -926,7 +952,7 @@ app.addEventListener("submit", async (e) => {
           ok = await act(() => api.setAnswered(r.id, body), "Marked answered. Praise God.");
         } else if (v.kind === "new") {
           const fresh = r.list === "lifegroup"
-            ? { list: "lifegroup", family_id: r.family_id, body, sheet_date: r.sheet_date ? ymd(new Date()) : null }
+            ? { list: "lifegroup", family_id: r.family_id, body, sheet_date: null }
             : r.for_member ? { list: "brothers", for_member: r.for_member, body } : { list: "brothers", for_name: r.for_name, body };
           ok = await act(async () => {
             await api.addRequest(fresh);
@@ -948,6 +974,7 @@ app.addEventListener("submit", async (e) => {
       case "bulk": {
         const n = await answerMany([...state.picked], String(v.note || "").trim());
         state.picked.clear();
+        state.bulkNote = "";
         render();
         if (n) toast(answeredMsg(n));
         break;
@@ -977,9 +1004,10 @@ app.addEventListener("submit", async (e) => {
         const body = String(v.body || "").trim();
         const forName = String(v.for_name || "").trim();
         if (!body || (!v.for && !forName)) { toast("Add who it's for and the request."); break; }
-        await act(() => api.addRequest(v.for
+        const ok = await act(() => api.addRequest(v.for
           ? { list: "brothers", for_member: v.for, body }
           : { list: "brothers", for_name: forName, body }), "Request added.");
+        if (ok) { state.open.add("brothers:" + (v.for ? "m:" + v.for : "n:" + normalize(forName))); render(); }
         break;
       }
       case "invite": {
@@ -1029,7 +1057,8 @@ if (!configured) {
     state.session = session;
     state.ready = true;
     if (!session) {
-      Object.assign(state, { member: null, data: null, admin: false, invites: [], tab: "week", form: null, confirm: null, prayNow: null, family: "all", man: "all" });
+      Object.assign(state, { member: null, data: null, admin: false, invites: [], tab: "week", form: null, confirm: null, prayNow: null, family: "all", man: "all",
+        search: { lifegroup: "", brothers: "" }, famDate: {}, showAllAnswered: false, bulkNote: "" });
       state.open.clear(); state.picked.clear();
       document.body.classList.remove("noscroll");
       render();

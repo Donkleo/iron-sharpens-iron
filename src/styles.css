@@ -174,7 +174,7 @@ details.more > .form { border: 0; border-top: 1px solid var(--line); border-radi
 .fams details.person:first-of-type { border-top: 0; }
 .fam-side { display: inline-flex; align-items: center; gap: 8px; flex: none; }
 .fam-body { display: grid; gap: 8px; padding: 0 0 14px 12px; min-width: 0; }
-.fam-body .list { border-top: 0; }
+.fam-body .list { border-top: 0; margin-left: 0; }
 .group .fam-body { padding-left: 0; }
 .date-tabs { padding-top: 2px; }
 .date-group { display: grid; gap: 4px; padding-top: 8px; }

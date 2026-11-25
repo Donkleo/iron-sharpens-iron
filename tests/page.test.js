@@ -135,6 +135,8 @@ describe("signed in", () => {
     await settle();
     expect(api.markPrayed).toHaveBeenCalledWith("r1");
     expect(ENCOURAGE.some((v) => toast().includes(v))).toBe(true);
+    // The page redraws, and focus goes back to the same button.
+    expect(document.activeElement.matches('[data-act="prayed"][data-id="r1"]')).toBe(true);
   });
 
   it("thanks you when that covers every request this week", async () => {
@@ -198,7 +200,7 @@ describe("signed in", () => {
     form.querySelector('input[name="orig_done"]').checked = true;
     submit(form);
     await settle();
-    expect(api.addRequest).toHaveBeenCalledWith(expect.objectContaining({ list: "lifegroup", family_id: "f1", body: "Got the job! Now the move." }));
+    expect(api.addRequest).toHaveBeenCalledWith({ list: "lifegroup", family_id: "f1", body: "Got the job! Now the move.", sheet_date: null });
     expect(api.setAnswered).toHaveBeenCalledWith("r1", "Got the job! Now the move.");
   });
 
