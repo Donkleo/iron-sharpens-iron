@@ -19,9 +19,17 @@ deploys to GitHub Pages.
 
 ## One-time Supabase setup
 
-1. **Database:** in the Supabase dashboard open SQL Editor, paste
-   `supabase/migrations/20261124000000_prayer_core.sql`, and run it.
-2. **Invite yourself as admin:** in SQL Editor run, with your own email and name:
+1. **Database:** copy the whole text of the migration file and run it.
+   - Open the file as plain text:
+     https://raw.githubusercontent.com/Donkleo/iron-sharpens-iron/main/supabase/migrations/20261124000000_prayer_core.sql
+     (or open [the file](supabase/migrations/20261124000000_prayer_core.sql)
+     on GitHub and tap **Raw**).
+   - Select all of the text and copy it. Paste the text itself, not the
+     file's name.
+   - In the Supabase dashboard, open **SQL Editor**, start a new query, paste,
+     and press **Run**. It should say "Success. No rows returned".
+2. **Invite yourself as admin:** in a new SQL Editor query, paste this, change
+   the email and name to your own, and press **Run**:
 
    ```sql
    insert into public.invites (email, name, role)
