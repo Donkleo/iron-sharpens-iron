@@ -2,8 +2,13 @@
 
 The lifegroup Google Sheet and the church calendar are copied in by syncs.
 They write with a **sync key**, which can only add, change or remove sheet
-and church events. It can't read anything, and it can't touch prayers,
-invites or group events. The database keeps only a fingerprint (SHA-256) of
+and church events and the sheet's families. It can't read anything, and it
+can't touch prayers, invites or group events.
+
+- **The sheet** is sent by a small script inside the Google Sheet, which
+  Google runs every hour and which uses no Claude. Its steps are in
+  `docs/sheet-sync.md`; do step 1 below first.
+- **Church events** come from a Claude routine, which needs step 2 below. The database keeps only a fingerprint (SHA-256) of
 the key, so the key itself is only ever in one place: wherever the sync runs.
 
 Run README steps 6 and 7 first.
@@ -12,7 +17,8 @@ Run README steps 6 and 7 first.
 
 In the Supabase SQL Editor, run this. It makes a random key, saves only its
 fingerprint, and shows the key once. Copy it straight into step 2; don't
-paste it into a chat, a note or a file in this repo.
+paste it into a chat, a note or a file in this repo. (For the sheet script,
+it goes in the script's settings instead; see `docs/sheet-sync.md`.)
 
 ```sql
 with k as (select replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '') as key)
@@ -24,9 +30,9 @@ returning (select key from k) as copy_this_key;
 To turn every sync key off (for example, if one leaks), run
 `delete from private.sync_keys;` and make a new one.
 
-## 2. Let the sync reach Supabase, with the key kept secret
+## 2. Church events: let the routine reach Supabase, with the key kept secret
 
-The sync runs in a Claude cloud environment, which only reaches the sites
+The church sync runs in a Claude cloud environment, which only reaches the sites
 it's allowed to. In that environment's settings:
 
 - **Allowed host:** your project's host, like `abcd1234.supabase.co` (from
